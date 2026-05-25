@@ -18,6 +18,21 @@ cfg.worker_id = [];
 cfg.skip_completed = true;
 cfg.case_name_suffix = '';
 
+% ---------------- COMSOL / LiveLink startup ----------------
+% Recommended flow:
+%   1. Open COMSOL with MATLAB manually.
+%   2. Run portable_run_batch from that session.
+%   3. This host session generates worker launch files.
+%   4. Each worker starts via plain `matlab -batch` and launches its own
+%      isolated COMSOL server inside run_band_dataset_worker.
+cfg.worker_launch_mode = 'matlab';
+cfg.worker_matlab_bin = 'matlab';
+cfg.comsol_root = 'D:\Software\COMSOL\COMSOL63\Multiphysics';
+cfg.comsol_mli_dir = fullfile(cfg.comsol_root, 'mli');
+cfg.comsol_host = '127.0.0.1';
+cfg.comsol_port = 2036;
+cfg.comsol_reuse_existing_server = false;
+
 % ---------------- Core simulation parameters ----------------
 cfg.unit_cell_length = 1.0;
 cfg.grid_resolution = 256;
@@ -51,4 +66,11 @@ cfg.verbose = true;
 % Example 2:
 % cfg.tensor_files = {};
 % cfg.tensor_dir = 'D:\dataset\subset_100';
+%
+% Advanced option:
+% If you deliberately want all workers to attach to an existing shared
+% COMSOL server, set:
+% cfg.comsol_reuse_existing_server = true;
+% cfg.comsol_host = '127.0.0.1';
+% cfg.comsol_port = 2036;
 end

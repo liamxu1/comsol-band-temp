@@ -21,11 +21,11 @@
 - 在 MATLAB 里可以正常调用 `mphstart`
 - `matlab -batch` 可以从命令行启动
 
-如果 `matlab` 没有在系统 PATH 里：
+如果 worker 用的 `matlab` 没有在系统 PATH 里：
 
-- 修改 `start_portable_batch_windows.bat` 中的 `MATLAB_BIN`
+- 修改 `portable_runner/portable_batch_config_template.m` 中的 `cfg.worker_matlab_bin`
 - 例如改成：
-  `set MATLAB_BIN=C:\Program Files\MATLAB\R2024b\bin\matlab.exe`
+  `cfg.worker_matlab_bin = 'C:\Program Files\MATLAB\R2024b\bin\matlab.exe';`
 
 ## 2. 包内目录结构
 
@@ -92,6 +92,54 @@ cfg.tensor_files = { ...
 ```
 
 如果设置了 `tensor_files`，它会优先于 `tensor_dir`。
+
+### 4.1.1 COMSOL with MATLAB 路径配置
+
+推荐模式是：
+
+- 你先手动打开 `COMSOL with MATLAB`
+- 在这个主会话里运行 `portable_run_batch`
+- 主会话负责生成配置并启动多个 worker
+- 每个 worker 用普通 `matlab -batch` 启动
+- 每个 worker 进程内显式加载 LiveLink，并各自启动独立 COMSOL server
+
+因此你需要编辑：
+
+- `portable_runner/portable_batch_config_template.m`
+
+默认关键字段：
+
+```matlab
+cfg.worker_launch_mode = 'matlab';
+cfg.worker_matlab_bin = 'matlab';
+cfg.comsol_root = 'D:\Software\COMSOL\COMSOL63\Multiphysics';
+cfg.comsol_mli_dir = fullfile(cfg.comsol_root, 'mli');
+cfg.comsol_host = '127.0.0.1';
+cfg.comsol_reuse_existing_server = false;
+```
+
+含义：
+
+- `worker_launch_mode = 'matlab'`
+  - 这是当前唯一推荐模式
+  - worker 始终用普通 `matlab -batch` 启动
+- `comsol_mli_dir`
+  - COMSOL LiveLink 的 `mli` 目录
+  - worker 启动后会先 `addpath(...)`
+- `comsol_root`
+  - COMSOL Multiphysics 安装根目录
+  - worker 用它来启动独立 `comsolmphserver`
+- `comsol_reuse_existing_server = false`
+  - 默认每个 worker 使用独立 server
+  - 不推荐多个 worker 共享同一个 server
+
+高级选项：如果你明确要让所有 worker 连接已有共享 server，可以改成：
+
+```matlab
+cfg.comsol_reuse_existing_server = true;
+cfg.comsol_host = '127.0.0.1';
+cfg.comsol_port = 2036;
+```
 
 ### 4.2 输出路径
 
@@ -184,25 +232,39 @@ cfg.write_standard_outputs = true;
 
 ## 5. 如何启动
 
-Windows 上最简单的方式：
+推荐入口只有一个：
 
-双击：
+1. 手动打开 `COMSOL with MATLAB`
+2. 在该会话里运行：
 
-- `start_portable_batch_windows.bat`
-
-或者在命令行中执行：
-
-```bat
-start_portable_batch_windows.bat
+```matlab
+run(fullfile('D:\path\to\portable_batch_package','portable_runner','portable_run_batch.m'))
 ```
 
-它会调用：
+或者如果当前目录已经在包根目录，也可以直接运行：
 
 ```matlab
 portable_run_batch
 ```
 
-然后自动启动多个 worker。
+主脚本会：
+
+- 加载包内路径
+- 读取 `portable_batch_config_template.m`
+- 生成 `output/batch_config.mat`
+- 生成 `output/launch_worker_*.bat`
+- 自动启动多个 worker
+
+兼容入口：
+
+- 根目录的 `start_portable_batch_windows.bat` 仍可用
+- 但它只是历史兼容路径，不再是默认推荐入口
+
+注意：
+
+- 不要手动双击 `output/launch_worker_01.bat` 之类的文件
+- 这些只是主程序自动生成的 worker 启动脚本
+- 推荐入口始终是 `COMSOL with MATLAB` 主会话里的 `portable_run_batch`
 
 ## 6. 输出结构
 
@@ -252,6 +314,7 @@ cfg.skip_completed = true;
 含义：
 
 - 已经生成 `*_band.mat` 且存在 `.done` 的 case 会自动跳过
+- 如果只有旧 `.done` 而没有 `*_band.mat`，不会被跳过
 - 可以中断后重启继续跑
 
 ## 9. 常见修改示例

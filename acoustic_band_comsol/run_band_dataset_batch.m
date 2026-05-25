@@ -6,7 +6,7 @@ function launch = run_band_dataset_batch(config_or_overrides)
 %   run_band_dataset_batch(cfg);
 
 cfg = normalizeBatchConfig(config_or_overrides);
-AddAcousticBandPaths();
+root_dir = AddAcousticBandPaths();
 
 if ~exist(cfg.output_dir, 'dir')
     mkdir(cfg.output_dir);
@@ -22,9 +22,9 @@ launch.commands = cell(cfg.worker_count, 1);
 launch.log_files = cell(cfg.worker_count, 1);
 launch.launch_files = cell(cfg.worker_count, 1);
 
-matlab_bin = resolveMatlabBinary();
-worker_script = ['try, run_band_dataset_worker(''', config_file, ...
-    '''); catch ME, disp(getReport(ME,''extended'')); exit(1); end; exit(0);'];
+matlab_bin = resolveMatlabBinary(cfg);
+module_dir = fullfile(root_dir, 'acoustic_band_comsol');
+worker_script = buildWorkerScript(config_file, module_dir);
 
 for i = 1:cfg.worker_count
     log_file = fullfile(cfg.output_dir, sprintf('worker_%02d.log', i));
@@ -42,6 +42,17 @@ for i = 1:cfg.worker_count
 end
 end
 
+function worker_script = buildWorkerScript(config_file, module_dir)
+worker_script = ['try, addpath(''', matlabEscape(module_dir), ...
+    '''); AddAcousticBandPaths(); run_band_dataset_worker(''', ...
+    matlabEscape(config_file), ...
+    '''); catch ME, disp(getReport(ME,''extended'')); exit(1); end; exit(0);'];
+end
+
+function out = matlabEscape(path_str)
+out = strrep(path_str, '''', '''''');
+end
+
 function cfg = normalizeBatchConfig(config_or_overrides)
 if nargin < 1 || isempty(config_or_overrides)
     cfg = band_dataset_config_template();
@@ -53,8 +64,27 @@ else
 end
 end
 
-function matlab_bin = resolveMatlabBinary()
-matlab_bin = 'matlab';
+function matlab_bin = resolveMatlabBinary(cfg)
+mode = 'matlab';
+if isfield(cfg, 'worker_launch_mode') && ~isempty(cfg.worker_launch_mode)
+    mode = char(string(cfg.worker_launch_mode));
+end
+if ~strcmpi(mode, 'matlab')
+    error('run_band_dataset_batch:UnsupportedWorkerLaunchMode', ...
+        ['Only cfg.worker_launch_mode = ''matlab'' is supported in the ', ...
+        'manual COMSOL-with-MATLAB workflow. Worker LiveLink startup now ', ...
+        'happens inside run_band_dataset_worker.']);
+end
+if isfield(cfg, 'worker_matlab_bin') && ~isempty(cfg.worker_matlab_bin)
+    matlab_bin = shellQuote(cfg.worker_matlab_bin);
+else
+    matlab_bin = shellQuote('matlab');
+end
+end
+
+function out = shellQuote(text)
+text = char(string(text));
+out = ['"', strrep(text, '"', '""'), '"'];
 end
 
 function launch_file = buildLaunchFile(output_dir, worker_index)
@@ -75,11 +105,11 @@ cleanup = onCleanup(@() fclose(fid));
 
 if ispc
     fprintf(fid, '@echo off\r\n');
-    fprintf(fid, '"%s" -batch "%s" > "%s" 2>&1\r\n', ...
+    fprintf(fid, '%s -batch "%s" > "%s" 2>&1\r\n', ...
         matlab_bin, worker_script, log_file);
 else
     fprintf(fid, '#!/usr/bin/env bash\n');
-    fprintf(fid, '"%s" -batch "%s" > "%s" 2>&1\n', ...
+    fprintf(fid, '%s -batch "%s" > "%s" 2>&1\n', ...
         matlab_bin, worker_script, log_file);
 end
 clear cleanup;

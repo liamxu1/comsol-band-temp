@@ -13,6 +13,13 @@ cfg.worker_count = 2;
 cfg.worker_id = [];
 cfg.skip_completed = true;
 cfg.case_name_suffix = '';
+cfg.worker_launch_mode = 'matlab';
+cfg.worker_matlab_bin = 'matlab';
+cfg.comsol_root = '';
+cfg.comsol_mli_dir = '';
+cfg.comsol_host = '127.0.0.1';
+cfg.comsol_port = 2036;
+cfg.comsol_reuse_existing_server = false;
 
 cfg.unit_cell_length = 1.0;
 cfg.grid_resolution = 256;
