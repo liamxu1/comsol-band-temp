@@ -3,7 +3,6 @@ function summary = run_band_dataset_worker(config_or_file)
 
 cfg = normalizeConfig(config_or_file);
 AddAcousticBandPaths();
-initializeWorkerComsol(cfg);
 
 if ~exist(cfg.output_dir, 'dir')
     mkdir(cfg.output_dir);
@@ -11,57 +10,67 @@ end
 
 task_files = listTensorFiles(cfg);
 worker_id = resolveWorkerId(cfg);
+state = initializeWorkerState(worker_id);
+state = initializeWorkerComsol(cfg, state);
 
 summary = struct();
 summary.worker_id = worker_id;
 summary.output_dir = cfg.output_dir;
-summary.records = repmat(struct( ...
-    'case_id', '', ...
-    'tensor_file', '', ...
-    'status', '', ...
-    'elapsed_s', NaN, ...
-    'dataset_file', '', ...
-    'message', ''), 0, 1);
+summary.worker_exit_reason = '';
+summary.records = repmat(buildCaseRecord('', ''), 0, 1);
 
 for i = 1:numel(task_files)
     tensor_file = task_files{i};
+
+    if cfg.worker_healthcheck_before_claim
+        [state, ready, exit_reason] = ensureWorkerReadyForClaim(cfg, state);
+        if ~ready
+            summary.worker_exit_reason = exit_reason;
+            break;
+        end
+    end
+
     [claimed, lock_file, case_id] = tryClaimCase(tensor_file, cfg, worker_id);
     if ~claimed
         continue;
     end
 
-    record = struct( ...
-        'case_id', case_id, ...
-        'tensor_file', tensor_file, ...
-        'status', 'started', ...
-        'elapsed_s', NaN, ...
-        'dataset_file', '', ...
-        'message', '');
-    t_start = tic;
+    record = buildCaseRecord(case_id, tensor_file);
+    updateBatchSummaryRecord(cfg, record, worker_id, true, false, false);
 
-    try
-        result = runOneTensorCase(tensor_file, cfg, case_id);
-        record.status = 'ok';
-        record.elapsed_s = toc(t_start);
-        record.dataset_file = result.dataset_file;
-        finalizeLock(lock_file, 'ok');
-    catch ME
-        record.status = 'error';
-        record.elapsed_s = toc(t_start);
-        record.message = ME.message;
-        finalizeLock(lock_file, ['error: ', ME.message]);
-    end
+    [record, state, stop_worker] = runClaimedCaseWithRecovery( ...
+        tensor_file, cfg, state, lock_file, record);
 
     summary.records(end + 1, 1) = record; %#ok<AGROW>
     if cfg.verbose
         fprintf('[worker %d] %s | %s | %.2f s\n', ...
             worker_id, case_id, record.status, record.elapsed_s);
     end
+    updateBatchSummaryRecord( ...
+        cfg, ...
+        record, ...
+        worker_id, ...
+        false, ...
+        true, ...
+        exist(record.dataset_file, 'file') == 2);
+
+    if stop_worker
+        summary.worker_exit_reason = record.worker_exit_reason;
+        break;
+    end
 end
 
 summary.completed = numel(summary.records);
 summary.ok_count = sum(strcmp({summary.records.status}, 'ok'));
 summary.error_count = sum(strcmp({summary.records.status}, 'error'));
+
+if ~isempty(summary.worker_exit_reason)
+    fprintf('[worker %d] WORKER_INFRA_RECOVERY_FAILED %s\n', ...
+        worker_id, summary.worker_exit_reason);
+    fprintf('[worker %d] WORKER_EXITING_NO_MORE_CLAIMS\n', worker_id);
+    errorWithCode('WORKER_INFRA_RECOVERY_FAILED', ...
+        'WORKER_EXITING_NO_MORE_CLAIMS: %s', summary.worker_exit_reason);
+end
 end
 
 function cfg = normalizeConfig(config_or_file)
@@ -83,17 +92,182 @@ else
 end
 end
 
-function initializeWorkerComsol(cfg)
+function state = initializeWorkerState(worker_id)
+state = struct();
+state.worker_id = worker_id;
+state.server_port = [];
+state.recovery_attempts_total = 0;
+state.consecutive_infra_failures = 0;
+state.last_healthcheck_ok = false;
+state.last_infra_message = '';
+state.comsol_mli_loaded = false;
+end
+
+function record = buildCaseRecord(case_id, tensor_file)
+record = struct( ...
+    'case_id', case_id, ...
+    'tensor_file', tensor_file, ...
+    'status', 'running', ...
+    'elapsed_s', NaN, ...
+    'dataset_file', '', ...
+    'message', '', ...
+    'failure_kind', '', ...
+    'infra_recovery_attempts', 0, ...
+    'worker_exit_reason', '');
+end
+
+function [record, state, stop_worker] = runClaimedCaseWithRecovery( ...
+        tensor_file, cfg, state, lock_file, record)
+stop_worker = false;
+t_start = tic;
+infra_retry_count = 0;
+
+while true
+    try
+        result = runOneTensorCase(tensor_file, cfg, record.case_id);
+        record.status = 'ok';
+        record.elapsed_s = toc(t_start);
+        record.dataset_file = result.dataset_file;
+        record.message = '';
+        record.failure_kind = '';
+        record.worker_exit_reason = '';
+        state.consecutive_infra_failures = 0;
+        state.last_healthcheck_ok = true;
+        finalizeLock(lock_file, record);
+        return;
+    catch ME
+        record.elapsed_s = toc(t_start);
+        record.dataset_file = '';
+        [failure_kind, message] = classifyFailure(ME);
+        record.failure_kind = failure_kind;
+        record.message = message;
+
+        if ~strcmp(failure_kind, 'infrastructure')
+            record.status = 'error';
+            state.consecutive_infra_failures = 0;
+            finalizeLock(lock_file, record);
+            return;
+        end
+
+        state.consecutive_infra_failures = state.consecutive_infra_failures + 1;
+        state.last_healthcheck_ok = false;
+        state.last_infra_message = message;
+
+        if shouldStopForInfraFailure(cfg, state)
+            record.status = 'error';
+            record.worker_exit_reason = sprintf( ...
+                'Consecutive infrastructure failures reached limit (%d): %s', ...
+                cfg.worker_infra_failure_limit, message);
+            finalizeLock(lock_file, record);
+            stop_worker = true;
+            return;
+        end
+
+        if ~cfg.enable_worker_comsol_recovery
+            record.status = 'error';
+            record.worker_exit_reason = sprintf( ...
+                'Infrastructure failure detected and recovery is disabled: %s', ...
+                message);
+            finalizeLock(lock_file, record);
+            stop_worker = true;
+            return;
+        end
+
+        if infra_retry_count >= cfg.case_infra_retry_limit
+            record.status = 'error';
+            record.worker_exit_reason = sprintf( ...
+                'Infrastructure failure persisted after %d retries: %s', ...
+                cfg.case_infra_retry_limit, message);
+            finalizeLock(lock_file, record);
+            stop_worker = true;
+            return;
+        end
+
+        [state, recovered, recovery_message] = recoverWorkerComsol(cfg, state, ...
+            sprintf('case %s failure', record.case_id));
+        record.infra_recovery_attempts = record.infra_recovery_attempts + 1;
+        infra_retry_count = infra_retry_count + 1;
+
+        if ~recovered
+            record.status = 'error';
+            record.worker_exit_reason = sprintf( ...
+                'COMSOL recovery failed after %s: %s', ...
+                record.case_id, recovery_message);
+            finalizeLock(lock_file, record);
+            stop_worker = true;
+            return;
+        end
+
+        if cfg.verbose
+            fprintf('[worker %d] recovered COMSOL session; retrying %s\n', ...
+                state.worker_id, record.case_id);
+        end
+    end
+end
+end
+
+function [state, ready, exit_reason] = ensureWorkerReadyForClaim(cfg, state)
+ready = true;
+exit_reason = '';
+
+try
+    state = ensureWorkerComsolHealthy(cfg, state);
+    state.consecutive_infra_failures = 0;
+    state.last_healthcheck_ok = true;
+catch ME
+    [failure_kind, message] = classifyFailure(ME);
+    state.consecutive_infra_failures = state.consecutive_infra_failures + 1;
+    state.last_healthcheck_ok = false;
+    state.last_infra_message = message;
+
+    if shouldStopForInfraFailure(cfg, state)
+        ready = false;
+        exit_reason = sprintf( ...
+            'Health check failed and infrastructure failure limit reached: %s', ...
+            message);
+        return;
+    end
+
+    if ~cfg.enable_worker_comsol_recovery
+        ready = false;
+        exit_reason = sprintf( ...
+            'Health check failed and recovery is disabled: %s', message);
+        return;
+    end
+
+    [state, recovered, recovery_message] = recoverWorkerComsol(cfg, state, ...
+        'pre-claim health check');
+    if ~recovered
+        ready = false;
+        exit_reason = sprintf('Health check recovery failed: %s', recovery_message);
+        return;
+    end
+
+    state.consecutive_infra_failures = 0;
+    state.last_healthcheck_ok = true;
+end
+end
+
+function tf = shouldStopForInfraFailure(cfg, state)
+tf = cfg.worker_infra_failure_limit > 0 && ...
+    state.consecutive_infra_failures >= cfg.worker_infra_failure_limit;
+end
+
+function state = initializeWorkerComsol(cfg, state)
 if cfg.verbose
     fprintf('[worker-init] mode=manual COMSOL-with-MATLAB host + per-worker isolated server\n');
 end
 
-loadComsolMli(cfg);
+state = ensureComsolMliLoaded(cfg, state, true);
 
 if hasLiveLinkConnection()
     if cfg.verbose
         fprintf('[worker-init] Existing COMSOL LiveLink session detected; reusing current connection\n');
         fprintf('[worker-init] LIVELINK_INIT_OK\n');
+    end
+    state.last_healthcheck_ok = true;
+    if cfg.comsol_reuse_existing_server
+        state.server_port = resolveConfigNumeric(cfg, 'comsol_port', 2036);
     end
     return;
 end
@@ -105,19 +279,92 @@ if ~hasCallableSymbol('mphstart')
 end
 
 if cfg.comsol_reuse_existing_server
-    connectSharedServer(cfg);
+    state = connectSharedServer(cfg, state);
 else
-    startIsolatedServer(cfg);
+    state = startIsolatedServer(cfg, state);
 end
 
 ensureModelUtilAvailable();
+state.last_healthcheck_ok = true;
 
 if cfg.verbose
     fprintf('[worker-init] LIVELINK_INIT_OK\n');
 end
 end
 
-function loadComsolMli(cfg)
+function state = ensureWorkerComsolHealthy(cfg, state)
+state = ensureComsolMliLoaded(cfg, state, false);
+
+if ~hasCallableSymbol('mphstart')
+    errorWithCode('MPHSTART_UNAVAILABLE', ...
+        'COMSOL LiveLink function mphstart is unavailable during health check.');
+end
+
+if ~hasLiveLinkConnection()
+    errorWithCode('SERVER_CONNECTION_LOST', ...
+        'COMSOL LiveLink connection is not available in the worker.');
+end
+
+ensureModelUtilAvailable();
+state.last_healthcheck_ok = true;
+end
+
+function [state, recovered, recovery_message] = recoverWorkerComsol(cfg, state, reason)
+recovered = false;
+recovery_message = '';
+state.recovery_attempts_total = state.recovery_attempts_total + 1;
+
+if cfg.verbose
+    fprintf('[worker %d] attempting COMSOL recovery after %s\n', ...
+        state.worker_id, reason);
+end
+
+resetWorkerComsolSession();
+
+backoff_s = resolveConfigNumeric(cfg, 'worker_recovery_backoff_s', 0);
+if backoff_s > 0
+    pause(backoff_s);
+end
+
+try
+    state = initializeWorkerComsol(cfg, state);
+    state.consecutive_infra_failures = 0;
+    state.last_healthcheck_ok = true;
+    recovered = true;
+catch ME
+    [~, recovery_message] = classifyFailure(ME);
+    state.last_infra_message = recovery_message;
+end
+end
+
+function resetWorkerComsolSession()
+try
+    import com.comsol.model.util.*
+    tags_java = ModelUtil.tags();
+    tags = cell(tags_java);
+    for i = 1:numel(tags)
+        try
+            ModelUtil.remove(tags{i});
+        catch
+        end
+    end
+    try
+        ModelUtil.disconnect();
+    catch
+    end
+    try
+        ModelUtil.clear();
+    catch
+    end
+catch
+end
+end
+
+function state = ensureComsolMliLoaded(cfg, state, verbose_log)
+if isfield(state, 'comsol_mli_loaded') && state.comsol_mli_loaded
+    return;
+end
+
 if ~isfield(cfg, 'comsol_mli_dir') || isempty(cfg.comsol_mli_dir)
     errorWithCode('MLI_NOT_CONFIGURED', ...
         'cfg.comsol_mli_dir is empty. Set it to the COMSOL LiveLink mli directory.');
@@ -127,7 +374,8 @@ if exist(cfg.comsol_mli_dir, 'dir') ~= 7
         'cfg.comsol_mli_dir does not exist: %s', cfg.comsol_mli_dir);
 end
 addpath(cfg.comsol_mli_dir);
-if cfg.verbose
+state.comsol_mli_loaded = true;
+if verbose_log && cfg.verbose
     fprintf('[worker-init] Added COMSOL mli path: %s\n', cfg.comsol_mli_dir);
     fprintf('[worker-init] which mphstart => %s\n', strtrim(which('mphstart')));
     fprintf('[worker-init] which mphstartcomsolmphserver => %s\n', ...
@@ -135,7 +383,7 @@ if cfg.verbose
 end
 end
 
-function connectSharedServer(cfg)
+function state = connectSharedServer(cfg, state)
 host = resolveConfigString(cfg, 'comsol_host', '127.0.0.1');
 port = resolveConfigNumeric(cfg, 'comsol_port', 2036);
 comsol_root = resolveComsolRoot(cfg);
@@ -150,9 +398,11 @@ catch ME
     errorWithCode('SERVER_CONNECT_FAILED', ...
         'Failed to connect to COMSOL server at %s:%d: %s', host, port, ME.message);
 end
+
+state.server_port = port;
 end
 
-function startIsolatedServer(cfg)
+function state = startIsolatedServer(cfg, state)
 comsol_root = resolveComsolRoot(cfg);
 host = resolveConfigString(cfg, 'comsol_host', '127.0.0.1');
 
@@ -185,6 +435,8 @@ catch ME
     errorWithCode('SERVER_CONNECT_FAILED', ...
         'Started COMSOL server on port %d but mphstart failed: %s', server_port, ME.message);
 end
+
+state.server_port = server_port;
 end
 
 function ensureModelUtilAvailable()
@@ -240,7 +492,50 @@ end
 
 function errorWithCode(code, varargin)
 message = sprintf(varargin{:});
-error('run_band_dataset_worker:%s', code, '[%s] %s', code, message);
+error(sprintf('run_band_dataset_worker:%s', code), '[%s] %s', code, message);
+end
+
+function [failure_kind, message] = classifyFailure(ME)
+message = sanitizeDoneValue(getReport(ME, 'basic', 'hyperlinks', 'off'));
+identifier = char(string(ME.identifier));
+combined = lower([identifier, ' ', message]);
+
+infra_identifiers = { ...
+    'run_band_dataset_worker:server_connect_failed', ...
+    'run_band_dataset_worker:server_start_failed', ...
+    'run_band_dataset_worker:server_connection_lost', ...
+    'run_band_dataset_worker:modelutil_unavailable', ...
+    'run_band_dataset_worker:mphstart_unavailable', ...
+    'run_band_dataset_worker:mli_not_configured', ...
+    'run_band_dataset_worker:mli_dir_missing', ...
+    'run_band_dataset_worker:server_helper_missing', ...
+    'run_band_dataset_worker:comsol_root_not_configured', ...
+    'run_band_dataset_worker:comsol_root_missing', ...
+    'run_band_dataset_worker:worker_infra_recovery_failed'};
+
+infra_patterns = { ...
+    'failed to connect', ...
+    'connection refused', ...
+    'broken pipe', ...
+    'connectexception', ...
+    'java heap space', ...
+    'outofmemory', ...
+    'out of memory', ...
+    'unable to allocate memory', ...
+    'insufficient memory', ...
+    'server connection lost', ...
+    'comsol server is not available', ...
+    'livelink connection is not available', ...
+    'modelutil is unavailable'};
+
+lower_identifier = lower(identifier);
+if any(strcmp(lower_identifier, infra_identifiers))
+    failure_kind = 'infrastructure';
+elseif any(contains(combined, infra_patterns))
+    failure_kind = 'infrastructure';
+else
+    failure_kind = 'case';
+end
 end
 
 function result = runOneTensorCase(tensor_file, cfg, case_id)
@@ -338,12 +633,18 @@ if cfg.verbose
 end
 end
 
-function finalizeLock(lock_file, status_text)
+function finalizeLock(lock_file, record)
 [case_output_dir, ~, ~] = fileparts(lock_file);
 done_file = fullfile(case_output_dir, '.done');
 fid = fopen(done_file, 'w');
 if fid >= 0
-    fprintf(fid, '%s\n', status_text);
+    fprintf(fid, 'status=%s\n', record.status);
+    fprintf(fid, 'elapsed_s=%.6f\n', record.elapsed_s);
+    fprintf(fid, 'dataset_file=%s\n', record.dataset_file);
+    fprintf(fid, 'failure_kind=%s\n', record.failure_kind);
+    fprintf(fid, 'infra_recovery_attempts=%d\n', record.infra_recovery_attempts);
+    fprintf(fid, 'worker_exit_reason=%s\n', sanitizeDoneValue(record.worker_exit_reason));
+    fprintf(fid, 'message=%s\n', sanitizeDoneValue(record.message));
     fclose(fid);
 end
 if exist(lock_file, 'dir')
@@ -364,4 +665,186 @@ end
 if status && ~contains(msg, 'already exists', 'IgnoreCase', true)
     ok = true;
 end
+end
+
+function updateBatchSummaryRecord(cfg, record, worker_id, has_lock, has_done, has_band_mat)
+summary_file = fullfile(cfg.output_dir, 'batch_summary.csv');
+lock_file = fullfile(cfg.output_dir, '.batch_summary.lock');
+cleanup = acquireLocalLock(lock_file);
+
+rows = readBatchSummaryRows(summary_file);
+row = buildBatchSummaryRow(record, worker_id, has_lock, has_done, has_band_mat);
+case_ids = rows(:, 1);
+row_index = find(strcmp(case_ids, record.case_id), 1);
+if isempty(row_index)
+    rows(end + 1, :) = row;
+else
+    rows(row_index, :) = row;
+end
+writeBatchSummaryRows(summary_file, rows);
+clear cleanup;
+end
+
+function cleanup = acquireLocalLock(lock_file)
+while true
+    if createLockDirectory(lock_file)
+        cleanup = onCleanup(@() releaseLocalLock(lock_file));
+        return;
+    end
+    pause(0.1);
+end
+end
+
+function releaseLocalLock(lock_file)
+if exist(lock_file, 'dir') == 7
+    rmdir(lock_file, 's');
+end
+end
+
+function row = buildBatchSummaryRow(record, worker_id, has_lock, has_done, has_band_mat)
+row = { ...
+    record.case_id, ...
+    record.status, ...
+    workerIdText(worker_id), ...
+    logicalText(has_lock), ...
+    logicalText(has_done), ...
+    logicalText(has_band_mat), ...
+    numericText(record.elapsed_s), ...
+    char(string(record.dataset_file)), ...
+    sanitizeDoneValue(record.message), ...
+    char(string(record.tensor_file)), ...
+    char(string(record.failure_kind)), ...
+    numericText(record.infra_recovery_attempts), ...
+    sanitizeDoneValue(record.worker_exit_reason)};
+end
+
+function rows = readBatchSummaryRows(summary_file)
+column_count = 13;
+rows = cell(0, column_count);
+if exist(summary_file, 'file') ~= 2
+    return;
+end
+
+fid = fopen(summary_file, 'r');
+if fid < 0
+    error('run_band_dataset_worker:BatchSummaryOpenFailed', ...
+        'Cannot open batch summary file for reading: %s', summary_file);
+end
+cleanup = onCleanup(@() fclose(fid));
+
+fgetl(fid);
+while true
+    line = fgetl(fid);
+    if ~ischar(line)
+        break;
+    end
+    if isempty(line)
+        continue;
+    end
+    row = parseCsvLine(line);
+    if isempty(row)
+        continue;
+    end
+    if numel(row) < column_count
+        row(end + 1:column_count) = {''};
+    elseif numel(row) > column_count
+        row = row(1:column_count);
+    end
+    rows(end + 1, :) = row; %#ok<AGROW>
+end
+clear cleanup;
+end
+
+function writeBatchSummaryRows(summary_file, rows)
+fid = fopen(summary_file, 'w');
+if fid < 0
+    error('run_band_dataset_worker:BatchSummaryOpenFailed', ...
+        'Cannot open batch summary file for writing: %s', summary_file);
+end
+cleanup = onCleanup(@() fclose(fid));
+
+fprintf(fid, ['case_id,status,worker_id,has_lock,has_done,has_band_mat,elapsed_s,', ...
+    'dataset_file,message,tensor_file,failure_kind,infra_recovery_attempts,', ...
+    'worker_exit_reason\n']);
+for i = 1:size(rows, 1)
+    fprintf(fid, '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n', ...
+        csvField(rows{i, 1}), ...
+        csvField(rows{i, 2}), ...
+        csvField(rows{i, 3}), ...
+        csvField(rows{i, 4}), ...
+        csvField(rows{i, 5}), ...
+        csvField(rows{i, 6}), ...
+        csvField(rows{i, 7}), ...
+        csvField(rows{i, 8}), ...
+        csvField(rows{i, 9}), ...
+        csvField(rows{i, 10}), ...
+        csvField(rows{i, 11}), ...
+        csvField(rows{i, 12}), ...
+        csvField(rows{i, 13}));
+end
+clear cleanup;
+end
+
+function row = parseCsvLine(line)
+row = {};
+current = '';
+in_quotes = false;
+i = 1;
+line_length = numel(line);
+
+while i <= line_length
+    ch = line(i);
+    if ch == '"'
+        if in_quotes && i < line_length && line(i + 1) == '"'
+            current(end + 1) = '"'; %#ok<AGROW>
+            i = i + 2;
+            continue;
+        end
+        in_quotes = ~in_quotes;
+    elseif ch == ',' && ~in_quotes
+        row{end + 1} = current; %#ok<AGROW>
+        current = '';
+    else
+        current(end + 1) = ch; %#ok<AGROW>
+    end
+    i = i + 1;
+end
+
+row{end + 1} = current;
+end
+
+function value = sanitizeDoneValue(value)
+value = char(string(value));
+value = strrep(value, sprintf('\r'), ' ');
+value = strrep(value, sprintf('\n'), ' ');
+end
+
+function text = logicalText(tf)
+if tf
+    text = 'true';
+else
+    text = 'false';
+end
+end
+
+function text = numericText(value)
+if isnan(value)
+    text = '';
+else
+    text = sprintf('%.6f', value);
+end
+end
+
+function text = workerIdText(worker_id)
+if isempty(worker_id)
+    text = '';
+else
+    text = char(string(worker_id));
+end
+end
+
+function text = csvField(value)
+text = char(string(value));
+text = strrep(text, '"', '""');
+text = ['"', text, '"'];
 end

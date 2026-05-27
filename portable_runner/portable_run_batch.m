@@ -23,6 +23,11 @@ fprintf('  comsol_root: %s\n', cfg.comsol_root);
 if isfield(cfg, 'comsol_mli_dir') && ~isempty(cfg.comsol_mli_dir)
     fprintf('  comsol_mli_dir: %s\n', cfg.comsol_mli_dir);
 end
+fprintf('  enable_worker_comsol_recovery: %d\n', cfg.enable_worker_comsol_recovery);
+fprintf('  case_infra_retry_limit: %d\n', cfg.case_infra_retry_limit);
+fprintf('  worker_infra_failure_limit: %d\n', cfg.worker_infra_failure_limit);
+fprintf('  worker_recovery_backoff_s: %d\n', cfg.worker_recovery_backoff_s);
+fprintf('  worker_healthcheck_before_claim: %d\n', cfg.worker_healthcheck_before_claim);
 fprintf('  grid_resolution: %d\n', cfg.grid_resolution);
 fprintf('  field_grid_resolution: %d\n', cfg.field_grid_resolution);
 fprintf('  total_k_points: %d\n', cfg.total_k_points);

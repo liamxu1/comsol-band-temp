@@ -116,6 +116,11 @@ cfg.comsol_root = 'D:\Software\COMSOL\COMSOL63\Multiphysics';
 cfg.comsol_mli_dir = fullfile(cfg.comsol_root, 'mli');
 cfg.comsol_host = '127.0.0.1';
 cfg.comsol_reuse_existing_server = false;
+cfg.enable_worker_comsol_recovery = true;
+cfg.case_infra_retry_limit = 1;
+cfg.worker_infra_failure_limit = 3;
+cfg.worker_recovery_backoff_s = 5;
+cfg.worker_healthcheck_before_claim = true;
 ```
 
 含义：
@@ -132,6 +137,16 @@ cfg.comsol_reuse_existing_server = false;
 - `comsol_reuse_existing_server = false`
   - 默认每个 worker 使用独立 server
   - 不推荐多个 worker 共享同一个 server
+- `enable_worker_comsol_recovery = true`
+  - worker 遇到 COMSOL 连接失效、server 崩溃或 OOM 类异常时尝试恢复
+- `case_infra_retry_limit = 1`
+  - 单个 case 在基础设施异常后的最大重试次数
+- `worker_infra_failure_limit = 3`
+  - 连续基础设施故障达到阈值后，worker 停止 claim 新任务并退出
+- `worker_recovery_backoff_s = 5`
+  - 每次恢复前等待几秒，避免 server 崩溃后高速重试
+- `worker_healthcheck_before_claim = true`
+  - 每次 claim 新 case 前先做 LiveLink / COMSOL 健康检查
 
 高级选项：如果你明确要让所有 worker 连接已有共享 server，可以改成：
 
@@ -252,6 +267,7 @@ portable_run_batch
 - 加载包内路径
 - 读取 `portable_batch_config_template.m`
 - 生成 `output/batch_config.mat`
+- 在 worker claim/完成 case 时增量更新 `output/batch_summary.csv`
 - 生成 `output/launch_worker_*.bat`
 - 自动启动多个 worker
 
@@ -272,6 +288,7 @@ portable_run_batch
 
 常见文件：
 
+- `batch_summary.csv`
 - `*_band.mat`
 - `*_bands_hz.csv`
 - `*_band_diagram.png`
@@ -281,6 +298,9 @@ portable_run_batch
 
 其中：
 
+- `batch_summary.csv` 会在 worker claim 或完成 case 时增量更新
+- 它最适合查看已经被 worker 触达的 case 的 `running/ok/error`
+- 它还会记录 `failure_kind`、`infra_recovery_attempts`、`worker_exit_reason`
 - `*_band.mat` 适合后续数据集训练直接读取
 - `*_bands_hz.csv` 适合快速检查 band 数值
 - `*_acoustic_band.mph` 适合人工打开检查
@@ -316,6 +336,28 @@ cfg.skip_completed = true;
 - 已经生成 `*_band.mat` 且存在 `.done` 的 case 会自动跳过
 - 如果只有旧 `.done` 而没有 `*_band.mat`，不会被跳过
 - 可以中断后重启继续跑
+
+## 8.1 Worker 自动恢复与熔断
+
+worker 现在会区分两类错误：
+
+- 普通 case 错误
+  - 当前 case 记为 `error`
+  - worker 继续处理后续 case
+- 基础设施错误
+  - 例如 COMSOL server 失联、LiveLink 断开、Java/内存/OOM 类错误
+  - worker 会尝试恢复自己的 COMSOL 会话
+  - 恢复成功后，当前 case 最多按 `case_infra_retry_limit` 重试
+  - 恢复失败或连续失败过多时，worker 停止 claim 新任务并退出
+
+worker 熔断退出时，日志里会有固定标记：
+
+```text
+WORKER_INFRA_RECOVERY_FAILED
+WORKER_EXITING_NO_MORE_CLAIMS
+```
+
+推荐用外部脚本、任务调度器或进程守护层在 worker 非零退出后重新拉起对应 worker。
 
 ## 9. 常见修改示例
 

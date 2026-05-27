@@ -6,6 +6,7 @@ if nargin < 3 || isempty(cfg)
 end
 
 [model, periodic_pairs] = BuildComsolAcousticBandModel(geom, cfg);
+k_cleanup = onCleanup(@() cleanupComsolModel(model));
 k_points = bz.k_points;
 
 ConfigureComsolKPathSweep(model, bz, cfg);
@@ -28,7 +29,8 @@ end
 AddComsolBandResults(model, bz, freqs, cfg);
 
 sim = struct();
-sim.model = model;
+sim.model = [];
+sim.model_tag = char(model.tag());
 sim.k_points = k_points;
 sim.path_coordinate = bz.path_coordinate;
 sim.band_frequencies_hz = freqs;
@@ -58,4 +60,15 @@ if cfg.save_model
     mphsave(model, fullfile(cfg.output_dir, [cfg.case_id, '_acoustic_band.mph']));
 end
 
+end
+
+function cleanupComsolModel(model)
+try
+    import com.comsol.model.util.*
+    tag = char(model.tag());
+    if ~isempty(tag)
+        ModelUtil.remove(tag);
+    end
+catch
+end
 end
