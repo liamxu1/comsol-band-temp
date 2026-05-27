@@ -34,7 +34,7 @@ cfg.density = 1.21;                    % kg/m^3
 cfg.path_points_per_segment = 12;
 cfg.total_k_points = [];
 cfg.num_eigenfrequencies = 8;
-cfg.search_frequency = 1000;           % Hz, eigenfrequency shift.
+cfg.search_frequency = 0;              % Hz, eigenfrequency shift.
 cfg.mesh_max_size_fraction = 1 / 35;
 cfg.mesh_min_size_fraction = 1 / 300;
 

@@ -58,6 +58,17 @@ for i = 1:numel(task_files)
         summary.worker_exit_reason = record.worker_exit_reason;
         break;
     end
+
+    if strcmp(record.status, 'ok')
+        [state, recycled_ok, recycle_message] = maybeRecycleComsolAfterCase( ...
+            cfg, state, record.case_id);
+        if ~recycled_ok
+            summary.worker_exit_reason = sprintf( ...
+                'Periodic COMSOL recycle failed after case %s: %s', ...
+                record.case_id, recycle_message);
+            break;
+        end
+    end
 end
 
 summary.completed = numel(summary.records);
@@ -96,11 +107,13 @@ function state = initializeWorkerState(worker_id)
 state = struct();
 state.worker_id = worker_id;
 state.server_port = [];
+state.server_kind = 'unknown';
 state.recovery_attempts_total = 0;
 state.consecutive_infra_failures = 0;
 state.last_healthcheck_ok = false;
 state.last_infra_message = '';
 state.comsol_mli_loaded = false;
+state.completed_case_count = 0;
 end
 
 function record = buildCaseRecord(case_id, tensor_file)
@@ -133,6 +146,7 @@ while true
         record.worker_exit_reason = '';
         state.consecutive_infra_failures = 0;
         state.last_healthcheck_ok = true;
+        state.completed_case_count = state.completed_case_count + 1;
         finalizeLock(lock_file, record);
         return;
     catch ME
@@ -253,6 +267,30 @@ tf = cfg.worker_infra_failure_limit > 0 && ...
     state.consecutive_infra_failures >= cfg.worker_infra_failure_limit;
 end
 
+function [state, recycled_ok, recycle_message] = maybeRecycleComsolAfterCase(cfg, state, case_id)
+recycled_ok = true;
+recycle_message = '';
+restart_every = resolveConfigNumeric(cfg, 'worker_restart_comsol_every_n_cases', 0);
+if restart_every <= 0
+    return;
+end
+if mod(state.completed_case_count, restart_every) ~= 0
+    return;
+end
+
+if cfg.verbose
+    fprintf('[worker %d] recycling COMSOL session after %d completed cases (last case: %s)\n', ...
+        state.worker_id, state.completed_case_count, case_id);
+end
+
+[state, recovered, recovery_message] = recoverWorkerComsol(cfg, state, ...
+    sprintf('periodic recycle after %d completed cases', state.completed_case_count));
+if ~recovered
+    recycled_ok = false;
+    recycle_message = recovery_message;
+end
+end
+
 function state = initializeWorkerComsol(cfg, state)
 if cfg.verbose
     fprintf('[worker-init] mode=manual COMSOL-with-MATLAB host + per-worker isolated server\n');
@@ -268,6 +306,7 @@ if hasLiveLinkConnection()
     state.last_healthcheck_ok = true;
     if cfg.comsol_reuse_existing_server
         state.server_port = resolveConfigNumeric(cfg, 'comsol_port', 2036);
+        state.server_kind = 'shared';
     end
     return;
 end
@@ -319,7 +358,7 @@ if cfg.verbose
         state.worker_id, reason);
 end
 
-resetWorkerComsolSession();
+resetWorkerComsolSession(cfg, state);
 
 backoff_s = resolveConfigNumeric(cfg, 'worker_recovery_backoff_s', 0);
 if backoff_s > 0
@@ -337,7 +376,7 @@ catch ME
 end
 end
 
-function resetWorkerComsolSession()
+function resetWorkerComsolSession(cfg, state)
 try
     import com.comsol.model.util.*
     tags_java = ModelUtil.tags();
@@ -357,6 +396,10 @@ try
     catch
     end
 catch
+end
+
+if ~cfg.comsol_reuse_existing_server
+    terminateIsolatedComsolServer(state);
 end
 end
 
@@ -400,6 +443,7 @@ catch ME
 end
 
 state.server_port = port;
+state.server_kind = 'shared';
 end
 
 function state = startIsolatedServer(cfg, state)
@@ -437,6 +481,74 @@ catch ME
 end
 
 state.server_port = server_port;
+state.server_kind = 'isolated';
+end
+
+function terminateIsolatedComsolServer(state)
+port = [];
+if isfield(state, 'server_port') && ~isempty(state.server_port)
+    port = state.server_port;
+end
+if isempty(port) || ~isfinite(port)
+    return;
+end
+
+pids = findListeningPidsByPort(port);
+for i = 1:numel(pids)
+    killProcessByPid(pids(i));
+end
+end
+
+function pids = findListeningPidsByPort(port)
+pids = [];
+
+if ispc
+    [status, output] = system(sprintf('netstat -ano -p tcp | findstr ":%d"', port));
+    if status ~= 0 || isempty(strtrim(output))
+        return;
+    end
+    lines = regexp(output, '\r?\n', 'split');
+    for i = 1:numel(lines)
+        line = strtrim(lines{i});
+        if isempty(line)
+            continue;
+        end
+        if isempty(regexpi(line, '\<LISTENING\>'))
+            continue;
+        end
+        tokens = regexp(line, '\s+(\d+)\s*$', 'tokens', 'once');
+        if isempty(tokens)
+            continue;
+        end
+        pid = str2double(tokens{1});
+        if isfinite(pid) && pid > 0
+            pids(end + 1) = pid; %#ok<AGROW>
+        end
+    end
+else
+    [status, output] = system(sprintf('lsof -nP -iTCP:%d -sTCP:LISTEN -t', port));
+    if status ~= 0 || isempty(strtrim(output))
+        return;
+    end
+    vals = sscanf(output, '%d');
+    pids = vals(:).';
+end
+
+if ~isempty(pids)
+    pids = unique(pids);
+end
+end
+
+function killProcessByPid(pid)
+if ~isfinite(pid) || pid <= 0
+    return;
+end
+
+if ispc
+    system(sprintf('taskkill /PID %d /T /F >NUL 2>&1', round(pid)));
+else
+    system(sprintf('kill -TERM %d >/dev/null 2>&1', round(pid)));
+end
 end
 
 function ensureModelUtilAvailable()

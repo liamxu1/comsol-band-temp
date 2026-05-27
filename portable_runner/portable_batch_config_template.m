@@ -37,6 +37,7 @@ cfg.case_infra_retry_limit = 1;
 cfg.worker_infra_failure_limit = 3;
 cfg.worker_recovery_backoff_s = 5;
 cfg.worker_healthcheck_before_claim = true;
+cfg.worker_restart_comsol_every_n_cases = 10;
 
 % ---------------- Core simulation parameters ----------------
 cfg.unit_cell_length = 1.0;
@@ -44,7 +45,7 @@ cfg.grid_resolution = 256;
 cfg.field_grid_resolution = 256;
 cfg.total_k_points = 51;
 cfg.num_eigenfrequencies = 10;
-cfg.search_frequency = 1000;
+cfg.search_frequency = 0;
 cfg.mesh_max_size_fraction = 1 / 35;
 cfg.mesh_min_size_fraction = 1 / 300;
 
