@@ -449,6 +449,10 @@ end
 function state = startIsolatedServer(cfg, state)
 comsol_root = resolveComsolRoot(cfg);
 host = resolveConfigString(cfg, 'comsol_host', '127.0.0.1');
+startup_lock = fullfile(cfg.output_dir, '.comsol_server_start.lock');
+startup_timeout_s = resolveConfigNumeric(cfg, 'comsol_server_start_lock_timeout_s', 300);
+retry_limit = resolveConfigNumeric(cfg, 'comsol_server_start_retry_limit', 4);
+retry_backoff_s = resolveConfigNumeric(cfg, 'comsol_server_start_retry_backoff_s', 3);
 
 if ~hasCallableSymbol('mphstartcomsolmphserver')
     errorWithCode('SERVER_HELPER_MISSING', ...
@@ -460,28 +464,48 @@ if cfg.verbose
     fprintf('[worker-init] Starting isolated COMSOL server from %s\n', comsol_root);
 end
 
-try
-    server_port = mphstartcomsolmphserver( ...
-        'comsolpath', comsol_root, ...
-        'silent', 'on');
-catch ME
-    errorWithCode('SERVER_START_FAILED', ...
-        'Failed to start COMSOL server from %s: %s', comsol_root, ME.message);
+startup_cleanup = acquireLocalLockWithTimeout(startup_lock, startup_timeout_s);
+
+for attempt = 1:(retry_limit + 1)
+    server_port = [];
+
+    try
+        server_port = mphstartcomsolmphserver( ...
+            'comsolpath', comsol_root, ...
+            'silent', 'on');
+
+        if cfg.verbose
+            fprintf('[worker-init] Started isolated COMSOL server on %s:%d\n', host, server_port);
+        end
+
+        mphstart(host, server_port, comsol_root);
+        state.server_port = server_port;
+        state.server_kind = 'isolated';
+        clear startup_cleanup;
+        return;
+    catch ME
+        if ~isempty(server_port) && isfinite(server_port)
+            terminateIsolatedComsolServer(struct('server_port', server_port));
+        end
+
+        if attempt > retry_limit
+            [~, message] = classifyFailure(ME);
+            errorWithCode('SERVER_START_FAILED', ...
+                ['Failed to start/connect isolated COMSOL server after %d attempts ', ...
+                '(last error: %s)'], attempt, message);
+        end
+
+        if cfg.verbose
+            fprintf('[worker-init] isolated server startup attempt %d/%d failed; retrying in %.1f s\n', ...
+                attempt, retry_limit + 1, retry_backoff_s);
+        end
+
+        if retry_backoff_s > 0
+            pause(retry_backoff_s);
+        end
+    end
 end
 
-if cfg.verbose
-    fprintf('[worker-init] Started isolated COMSOL server on %s:%d\n', host, server_port);
-end
-
-try
-    mphstart(host, server_port, comsol_root);
-catch ME
-    errorWithCode('SERVER_CONNECT_FAILED', ...
-        'Started COMSOL server on port %d but mphstart failed: %s', server_port, ME.message);
-end
-
-state.server_port = server_port;
-state.server_kind = 'isolated';
 end
 
 function terminateIsolatedComsolServer(state)
@@ -798,10 +822,19 @@ clear cleanup;
 end
 
 function cleanup = acquireLocalLock(lock_file)
+cleanup = acquireLocalLockWithTimeout(lock_file, inf);
+end
+
+function cleanup = acquireLocalLockWithTimeout(lock_file, timeout_s)
+t_start = tic;
 while true
     if createLockDirectory(lock_file)
         cleanup = onCleanup(@() releaseLocalLock(lock_file));
         return;
+    end
+    if isfinite(timeout_s) && toc(t_start) >= timeout_s
+        error('run_band_dataset_worker:LockTimeout', ...
+            'Timed out waiting for lock directory %s.', lock_file);
     end
     pause(0.1);
 end

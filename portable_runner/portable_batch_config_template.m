@@ -38,6 +38,9 @@ cfg.worker_infra_failure_limit = 3;
 cfg.worker_recovery_backoff_s = 5;
 cfg.worker_healthcheck_before_claim = true;
 cfg.worker_restart_comsol_every_n_cases = 10;
+cfg.comsol_server_start_retry_limit = 4;
+cfg.comsol_server_start_retry_backoff_s = 3;
+cfg.comsol_server_start_lock_timeout_s = 300;
 
 % ---------------- Core simulation parameters ----------------
 cfg.unit_cell_length = 1.0;
