@@ -1,4 +1,4 @@
-function cfg = portable_batch_config_template()
+function cfg = portable_batch_config_template(overrides)
 %PORTABLE_BATCH_CONFIG_TEMPLATE Editable config for portable COMSOL batch runs.
 %
 % Edit this file on the target machine before running.
@@ -8,11 +8,16 @@ paths = portable_add_paths();
 cfg = band_dataset_config_template();
 
 % ---------------- Required paths ----------------
-cfg.tensor_dir = 'D:\Desktop\portable_batch_package_dist\dist\dataset\tensors';
+if ispc
+    cfg.tensor_dir = 'D:\Desktop\portable_batch_package_dist\dist\dataset\tensors';
+    cfg.output_dir = fullfile(paths.package_root, 'output');
+else
+    cfg.tensor_dir = '/public/home/sa23001064/xqy/acoustic-band-comsol/bspline/tensors';
+    cfg.output_dir = fullfile(paths.package_root, 'output_linux');
+end
 cfg.tensor_files = {};
 cfg.task_index_start = [];
 cfg.task_index_end = [];
-cfg.output_dir = fullfile(paths.package_root, 'output');
 
 % ---------------- Batch parallelism ----------------
 cfg.worker_count = 2;
@@ -28,8 +33,13 @@ cfg.case_name_suffix = '';
 %   4. Each worker starts via plain `matlab -batch` and launches its own
 %      isolated COMSOL server inside run_band_dataset_worker.
 cfg.worker_launch_mode = 'matlab';
-cfg.worker_matlab_bin = 'matlab';
-cfg.comsol_root = 'D:\Software\COMSOL\COMSOL63\Multiphysics';
+if ispc
+    cfg.worker_matlab_bin = 'matlab';
+    cfg.comsol_root = 'D:\Software\COMSOL\COMSOL63\Multiphysics';
+else
+    cfg.worker_matlab_bin = '/public/home/sa23001064/matlab2025a/bin/matlab';
+    cfg.comsol_root = '/public/home/sa23001064/COMSOL';
+end
 cfg.comsol_mli_dir = fullfile(cfg.comsol_root, 'mli');
 cfg.comsol_host = '127.0.0.1';
 cfg.comsol_port = 2036;
@@ -89,4 +99,19 @@ cfg.verbose = true;
 % cfg.comsol_reuse_existing_server = true;
 % cfg.comsol_host = '127.0.0.1';
 % cfg.comsol_port = 2036;
+
+if nargin >= 1 && ~isempty(overrides)
+    if ~isstruct(overrides)
+        error('portable_batch_config_template:InvalidOverrides', ...
+            'Optional overrides must be a struct.');
+    end
+    cfg = mergeStruct(cfg, overrides);
+end
+end
+
+function out = mergeStruct(out, in)
+names = fieldnames(in);
+for i = 1:numel(names)
+    out.(names{i}) = in.(names{i});
+end
 end

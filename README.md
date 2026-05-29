@@ -35,6 +35,8 @@
 portable_batch_package/
   README.md
   start_portable_batch_windows.bat
+  start_portable_batch_linux.sh
+  cleanup_portable_batch_linux.sh
   portable_runner/
     portable_add_paths.m
     portable_batch_config_template.m
@@ -57,6 +59,12 @@ portable_batch_package/
 - `portable_runner/portable_batch_config_template.m`
 
 你通常只需要改这个文件。
+
+如果你在 Linux 上跑，也可以直接改：
+
+- `start_portable_batch_linux.sh`
+
+这个脚本把最常改的外层参数都提到了文件顶部。
 
 ## 4. 最常改的参数
 
@@ -218,6 +226,78 @@ cfg.worker_count = 2;
 
 - 不是单个 COMSOL 求解器内部多线程
 - 而是同时启动多个 MATLAB 进程
+
+## 5. Linux 无 GUI 启动
+
+仓库已经提供 Linux 入口：
+
+- `start_portable_batch_linux.sh`
+
+脚本顶部可直接改这些外层参数：
+
+- `MATLAB_BIN`
+- `COMSOL_ROOT`
+- `TENSOR_DIR`
+- `OUTPUT_DIR`
+- `TASK_INDEX_START`
+- `TASK_INDEX_END`
+- `WORKER_COUNT`
+
+你当前环境的默认值已经写成：
+
+- `MATLAB_BIN=/public/home/sa23001064/matlab2025a/bin/matlab`
+- `COMSOL_ROOT=/public/home/sa23001064/COMSOL`
+- `TENSOR_DIR=/public/home/sa23001064/xqy/acoustic-band-comsol/bspline/tensors`
+- `OUTPUT_DIR=<repo>/output_linux`
+
+启动方式：
+
+```bash
+cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
+./start_portable_batch_linux.sh
+```
+
+说明：
+
+- 脚本会自动探测 COMSOL LiveLink `mli` 是在 `COMSOL_ROOT/mli` 还是 `COMSOL_ROOT/Multiphysics/mli`
+- host 进程使用普通 `matlab -batch`
+- 每个 worker 会自行启动独立 `comsolmphserver`
+- 不需要图形界面，也不需要手动点击 `COMSOL with MATLAB`
+
+如果你想只跑某个范围，直接改：
+
+```bash
+TASK_INDEX_START="1"
+TASK_INDEX_END="100"
+```
+
+如果想换输出目录，直接改：
+
+```bash
+OUTPUT_DIR="/public/home/sa23001064/xqy/acoustic-band-comsol/output/run_001"
+```
+
+## 6. Linux 清锁与残留 server 清理
+
+仓库提供清理脚本：
+
+- `cleanup_portable_batch_linux.sh`
+
+默认会：
+
+- 删除 `output_dir` 下面的 case `.lock`
+- 删除 `.batch_summary.lock`
+- 删除 `.comsol_server_start.lock`
+- 杀掉当前用户名下的 `comsolmphserver` 进程
+
+用法：
+
+```bash
+cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
+./cleanup_portable_batch_linux.sh
+```
+
+如果你的输出目录不是默认的 `output_linux`，先改脚本顶部的 `OUTPUT_DIR`。
 - 每个进程自动抢占不同样本
 
 建议：

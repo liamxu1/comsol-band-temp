@@ -1,8 +1,16 @@
-function launch = portable_run_batch()
+function launch = portable_run_batch(overrides)
 %PORTABLE_RUN_BATCH Entry point for portable COMSOL batch generation.
 
 portable_add_paths();
-cfg = portable_batch_config_template();
+if nargin < 1
+    overrides = struct();
+elseif isempty(overrides)
+    overrides = struct();
+elseif ~isstruct(overrides)
+    error('portable_run_batch:InvalidOverrides', ...
+        'Optional overrides must be a struct.');
+end
+cfg = portable_batch_config_template(overrides);
 
 if ~exist(cfg.tensor_dir, 'dir') && isempty(cfg.tensor_files)
     error('portable_run_batch:MissingTensorDir', ...
