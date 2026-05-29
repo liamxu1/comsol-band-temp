@@ -67,12 +67,15 @@ portable_batch_package/
 ```matlab
 cfg.tensor_dir = 'D:\path\to\your\tensor_dataset';
 cfg.tensor_files = {};
+cfg.task_index_start = [];
+cfg.task_index_end = [];
 ```
 
 含义：
 
 - `cfg.tensor_dir`：批量扫描整个目录下的 `*_tensor.mat`
 - `cfg.tensor_files`：如果不为空，则只跑这里列出的文件
+- `cfg.task_index_start/task_index_end`：在稳定排序后的任务列表上截取一个闭区间
 
 二选一的推荐方式：
 
@@ -93,7 +96,42 @@ cfg.tensor_files = { ...
 
 如果设置了 `tensor_files`，它会优先于 `tensor_dir`。
 
-### 4.1.1 COMSOL with MATLAB 路径配置
+### 4.1.1 多机群分片运行
+
+如果你要把同一个包放到不同机群上跑，推荐每个机群使用不同的 `output_dir`，并给每次运行指定不重叠的任务范围：
+
+```matlab
+cfg.tensor_dir = 'D:\dataset\bspline\tensors';
+cfg.tensor_files = {};
+cfg.task_index_start = 1;
+cfg.task_index_end = 1000;
+cfg.output_dir = 'D:\band_output\cluster_a';
+```
+
+另一组机器可以改成：
+
+```matlab
+cfg.task_index_start = 1001;
+cfg.task_index_end = 2000;
+cfg.output_dir = 'D:\band_output\cluster_b';
+```
+
+规则：
+
+- 索引是 MATLAB 风格的 `1`-based
+- 范围是闭区间，`start` 和 `end` 都包含
+- 如果只设置 `task_index_start`，则表示从该位置一直跑到最后
+- 如果 `task_index_end` 超过实际任务数，会自动截断到最后一个任务
+- `worker_count` 只控制单个机群内部的并行，不影响分片边界
+
+排序稳定性说明：
+
+- 自动扫描 `tensor_dir` 时，程序会先收集 `*_tensor.mat`
+- 然后按文件名做显式升序排序，再按范围切片
+- 因此不会依赖不同操作系统返回目录项的原始顺序
+- 为了便于核对，本次运行实际采用的顺序还会写入 `output_dir/task_manifest.csv`
+
+### 4.1.2 COMSOL with MATLAB 路径配置
 
 推荐模式是：
 
@@ -265,8 +303,10 @@ portable_run_batch
 主脚本会：
 
 - 加载包内路径
+- 解析任务列表，按文件名稳定排序并应用 `task_index_start/task_index_end`
 - 读取 `portable_batch_config_template.m`
 - 生成 `output/batch_config.mat`
+- 生成 `output/task_manifest.csv`
 - 在 worker claim/完成 case 时增量更新 `output/batch_summary.csv`
 - 生成 `output/launch_worker_*.bat`
 - 自动启动多个 worker
@@ -288,6 +328,7 @@ portable_run_batch
 
 常见文件：
 
+- `task_manifest.csv`
 - `batch_summary.csv`
 - `*_band.mat`
 - `*_bands_hz.csv`
@@ -298,6 +339,7 @@ portable_run_batch
 
 其中：
 
+- `task_manifest.csv` 记录这次运行真正使用的任务顺序、索引和源文件路径
 - `batch_summary.csv` 会在 worker claim 或完成 case 时增量更新
 - 它最适合查看已经被 worker 触达的 case 的 `running/ok/error`
 - 它还会记录 `failure_kind`、`infra_recovery_attempts`、`worker_exit_reason`
@@ -391,6 +433,28 @@ cfg.tensor_files = { ...
     'D:\dataset\bspline\tensors\p4mm_Vol0.31_K0.0000_Sample_100987_tensor.mat'};
 cfg.output_dir = 'D:\band_output\subset10';
 cfg.worker_count = 2;
+```
+
+### 示例 D：机群 A 跑第 1 到 1000 个
+
+```matlab
+cfg.tensor_dir = 'D:\dataset\bspline\tensors';
+cfg.tensor_files = {};
+cfg.task_index_start = 1;
+cfg.task_index_end = 1000;
+cfg.output_dir = 'D:\band_output\cluster_a';
+cfg.worker_count = 3;
+```
+
+### 示例 E：机群 B 跑第 1001 到 2000 个
+
+```matlab
+cfg.tensor_dir = 'D:\dataset\bspline\tensors';
+cfg.tensor_files = {};
+cfg.task_index_start = 1001;
+cfg.task_index_end = 2000;
+cfg.output_dir = 'D:\band_output\cluster_b';
+cfg.worker_count = 3;
 ```
 
 ## 10. 如果要重新生成这个便携包

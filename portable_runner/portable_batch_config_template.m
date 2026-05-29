@@ -10,6 +10,8 @@ cfg = band_dataset_config_template();
 % ---------------- Required paths ----------------
 cfg.tensor_dir = 'D:\Desktop\portable_batch_package_dist\dist\dataset\tensors';
 cfg.tensor_files = {};
+cfg.task_index_start = [];
+cfg.task_index_end = [];
 cfg.output_dir = fullfile(paths.package_root, 'output');
 
 % ---------------- Batch parallelism ----------------
@@ -75,6 +77,11 @@ cfg.verbose = true;
 % Example 2:
 % cfg.tensor_files = {};
 % cfg.tensor_dir = 'D:\dataset\subset_100';
+%
+% Example 3:
+% cfg.tensor_files = {};
+% cfg.task_index_start = 1001;
+% cfg.task_index_end = 2000;
 %
 % Advanced option:
 % If you deliberately want all workers to attach to an existing shared

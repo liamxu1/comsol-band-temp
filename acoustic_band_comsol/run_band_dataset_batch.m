@@ -12,6 +12,23 @@ if ~exist(cfg.output_dir, 'dir')
     mkdir(cfg.output_dir);
 end
 
+selection = ResolveTensorTaskSelection(cfg);
+manifest_file = fullfile(cfg.output_dir, 'task_manifest.csv');
+writeTaskManifest(manifest_file, selection);
+printTaskSelectionSummary(selection, manifest_file);
+
+cfg.tensor_files = selection.selected_files;
+cfg.task_index_start_requested = selection.requested_start;
+cfg.task_index_end_requested = selection.requested_end;
+cfg.task_index_start = [];
+cfg.task_index_end = [];
+cfg.task_selection_source = selection.source;
+cfg.task_total_count = selection.total_count;
+cfg.task_selected_count = selection.selected_count;
+cfg.task_index_start_effective = selection.effective_start;
+cfg.task_index_end_effective = selection.effective_end;
+cfg.task_manifest_file = manifest_file;
+
 config_file = fullfile(cfg.output_dir, 'batch_config.mat');
 save(config_file, 'cfg', '-v7');
 
@@ -21,6 +38,17 @@ launch.worker_count = cfg.worker_count;
 launch.commands = cell(cfg.worker_count, 1);
 launch.log_files = cell(cfg.worker_count, 1);
 launch.launch_files = cell(cfg.worker_count, 1);
+launch.task_manifest_file = manifest_file;
+launch.task_total_count = selection.total_count;
+launch.task_selected_count = selection.selected_count;
+launch.task_index_start_effective = selection.effective_start;
+launch.task_index_end_effective = selection.effective_end;
+launch.first_case_id = '';
+launch.last_case_id = '';
+if selection.selected_count > 0
+    launch.first_case_id = selection.selected_case_ids{1};
+    launch.last_case_id = selection.selected_case_ids{end};
+end
 
 matlab_bin = resolveMatlabBinary(cfg);
 module_dir = fullfile(root_dir, 'acoustic_band_comsol');
@@ -125,4 +153,75 @@ if ispc
 else
     cmd = sprintf('nohup "%s" > /dev/null 2>&1 &', launch_file);
 end
+end
+
+function writeTaskManifest(manifest_file, selection)
+fid = fopen(manifest_file, 'w');
+if fid < 0
+    error('run_band_dataset_batch:CannotWriteTaskManifest', ...
+        'Cannot write task manifest: %s', manifest_file);
+end
+cleanup = onCleanup(@() fclose(fid));
+
+fprintf(fid, 'task_index,case_id,tensor_file\n');
+for i = 1:selection.selected_count
+    task_index = selection.effective_start + i - 1;
+    fprintf(fid, '%s,%s,%s\n', ...
+        csvField(task_index), ...
+        csvField(selection.selected_case_ids{i}), ...
+        csvField(selection.selected_files{i}));
+end
+clear cleanup;
+end
+
+function printTaskSelectionSummary(selection, manifest_file)
+fprintf('Task selection:\n');
+fprintf('  source: %s\n', selection.source);
+fprintf('  total_discovered_tasks: %d\n', selection.total_count);
+fprintf('  requested_range: %s\n', describeRequestedRange(selection));
+fprintf('  effective_range: %s\n', describeEffectiveRange(selection));
+fprintf('  selected_task_count: %d\n', selection.selected_count);
+if selection.selected_count > 0
+    fprintf('  first_case_id: %s\n', selection.selected_case_ids{1});
+    fprintf('  last_case_id: %s\n', selection.selected_case_ids{end});
+else
+    fprintf('  first_case_id: <none>\n');
+    fprintf('  last_case_id: <none>\n');
+end
+if selection.end_clamped
+    fprintf('  range_end_clamped_to_task_count: true\n');
+end
+fprintf('  task_manifest: %s\n', manifest_file);
+end
+
+function text = describeRequestedRange(selection)
+if isempty(selection.requested_start) && isempty(selection.requested_end)
+    text = '<all>';
+    return;
+end
+
+start_index = selection.requested_start;
+end_index = selection.requested_end;
+if isempty(start_index)
+    start_index = 1;
+end
+if isempty(end_index)
+    text = sprintf('%d..end', start_index);
+else
+    text = sprintf('%d..%d', start_index, end_index);
+end
+end
+
+function text = describeEffectiveRange(selection)
+if isempty(selection.effective_start)
+    text = '<empty>';
+else
+    text = sprintf('%d..%d', selection.effective_start, selection.effective_end);
+end
+end
+
+function text = csvField(value)
+text = char(string(value));
+text = strrep(text, '"', '""');
+text = ['"', text, '"'];
 end

@@ -706,15 +706,8 @@ result = RunAcousticBandFromTensor(tensor_file, symmetry_group, ...
 end
 
 function files = listTensorFiles(cfg)
-if ~isempty(cfg.tensor_files)
-    files = cfg.tensor_files;
-    return;
-end
-listing = dir(fullfile(cfg.tensor_dir, '*_tensor.mat'));
-[~, order] = sort({listing.name});
-listing = listing(order);
-files = cellfun(@(f, n) fullfile(f, n), {listing.folder}, {listing.name}, ...
-    'UniformOutput', false);
+selection = ResolveTensorTaskSelection(cfg);
+files = selection.selected_files;
 end
 
 function worker_id = resolveWorkerId(cfg)
