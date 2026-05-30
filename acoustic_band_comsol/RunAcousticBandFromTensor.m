@@ -23,7 +23,8 @@ end
 result = RunAcousticBandFromCoefficients(sample.coefficients, symmetry_group, ...
     unit_cell_length, cfg);
 result.input_sample = sample;
-result.dataset_file = SaveAcousticBandDatasetFile(result, sample, cfg);
+result.dataset_files = SaveAcousticBandDatasetFile(result, sample, cfg);
+result.dataset_file = result.dataset_files.band_dataset_file;
 
 if isfield(sample, 'xPhys_HD_Final')
     result.geometry_validation = CompareReconstructionToTensor( ...
@@ -32,8 +33,11 @@ end
 
 if isstruct(result.output_files)
     result.output_files.dataset_mat = result.dataset_file;
+    result.output_files.fields_dataset_mat = result.dataset_files.fields_dataset_file;
 else
-    result.output_files = struct('dataset_mat', result.dataset_file);
+    result.output_files = struct( ...
+        'dataset_mat', result.dataset_file, ...
+        'fields_dataset_mat', result.dataset_files.fields_dataset_file);
 end
 
 end

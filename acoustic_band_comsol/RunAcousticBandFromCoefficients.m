@@ -32,12 +32,17 @@ else
     result.band_frequencies_hz = [];
 end
 
-result.dataset_file = SaveAcousticBandDatasetFile(result, struct(), cfg);
+result.dataset_files = SaveAcousticBandDatasetFile(result, struct(), cfg);
+result.dataset_file = result.dataset_files.band_dataset_file;
 if cfg.write_standard_outputs
     result.output_files = SaveAcousticBandResult(result, cfg);
 else
-    result.output_files = struct('dataset_mat', result.dataset_file);
+    result.output_files = struct( ...
+        'dataset_mat', result.dataset_file, ...
+        'fields_dataset_mat', result.dataset_files.fields_dataset_file);
 end
+result.output_files.dataset_mat = result.dataset_file;
+result.output_files.fields_dataset_mat = result.dataset_files.fields_dataset_file;
 
 end
 

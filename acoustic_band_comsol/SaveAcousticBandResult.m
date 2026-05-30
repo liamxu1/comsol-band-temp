@@ -16,6 +16,10 @@ result_to_save = result; %#ok<NASGU>
 if isfield(result_to_save, 'comsol') && isstruct(result_to_save.comsol) && isfield(result_to_save.comsol, 'model')
     result_to_save.comsol = rmfield(result_to_save.comsol, 'model');
 end
+if isfield(result_to_save, 'comsol') && isstruct(result_to_save.comsol) && ...
+        isfield(result_to_save.comsol, 'mode_fields')
+    result_to_save.comsol = rmfield(result_to_save.comsol, 'mode_fields');
+end
 if exist(mat_file, 'file')
     delete(mat_file);
 end
@@ -28,6 +32,10 @@ catch
     save(mat_file, 'result_to_save', '-v7');
 end
 files.result_mat = mat_file;
+if isfield(result, 'dataset_files') && isstruct(result.dataset_files) && ...
+        isfield(result.dataset_files, 'fields_dataset_file')
+    files.fields_dataset_mat = result.dataset_files.fields_dataset_file;
+end
 
 display_png = fullfile(cfg.output_dir, [case_id, '_display_reference.png']);
 imwrite(result.geometry.displayImage, display_png);
