@@ -47,6 +47,16 @@ cfg.solid_phase_value = 1;
 cfg.save_model = false;
 cfg.write_standard_outputs = false;
 cfg.verbose = true;
+cfg.split_band_and_fields_files = true;
+cfg.save_fields_for_sample_stride = 10;
+cfg.save_fields_for_sample_offset = 1;
+cfg.field_sample_count = 50;
+cfg.field_sample_k_bins = 10;
+cfg.field_sample_band_bins = 5;
+cfg.field_output_grid_resolution = 128;
+cfg.field_output_dtype = 'single';
+cfg.field_sampling_mode = 'stratified_random';
+cfg.task_sequence_index = [];
 
 if nargin == 1 && isstruct(varargin{1})
     cfg = mergeStruct(cfg, varargin{1});

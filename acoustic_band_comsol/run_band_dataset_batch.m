@@ -28,6 +28,7 @@ cfg.task_selected_count = selection.selected_count;
 cfg.task_index_start_effective = selection.effective_start;
 cfg.task_index_end_effective = selection.effective_end;
 cfg.task_manifest_file = manifest_file;
+cfg.task_sequence_index_map = buildTaskSequenceIndexMap(selection);
 
 config_file = fullfile(cfg.output_dir, 'batch_config.mat');
 save(config_file, 'cfg', '-v7');
@@ -224,4 +225,12 @@ function text = csvField(value)
 text = char(string(value));
 text = strrep(text, '"', '""');
 text = ['"', text, '"'];
+end
+
+function task_sequence_index_map = buildTaskSequenceIndexMap(selection)
+task_sequence_index_map = struct();
+for i = 1:selection.selected_count
+    case_key = matlab.lang.makeValidName(selection.selected_case_ids{i});
+    task_sequence_index_map.(case_key) = i;
+end
 end

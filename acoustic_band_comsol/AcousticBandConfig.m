@@ -49,6 +49,16 @@ cfg.verbose = true;
 % Field sampling defaults for dataset generation.
 cfg.field_grid_resolution = 256;
 cfg.field_expression_candidates = {'acpr.p_t', 'p', 'acpr.p', 'abs(acpr.p_t)', 'abs(p)'};
+cfg.split_band_and_fields_files = true;
+cfg.save_fields_for_sample_stride = 10;
+cfg.save_fields_for_sample_offset = 1;
+cfg.field_sample_count = 50;
+cfg.field_sample_k_bins = 10;
+cfg.field_sample_band_bins = 5;
+cfg.field_output_grid_resolution = 128;
+cfg.field_output_dtype = 'single';
+cfg.field_sampling_mode = 'stratified_random';
+cfg.task_sequence_index = [];
 
 if nargin == 1 && isstruct(varargin{1})
     cfg = mergeStruct(cfg, varargin{1});

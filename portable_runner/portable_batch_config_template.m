@@ -10,7 +10,7 @@ cfg = band_dataset_config_template();
 % ---------------- Required paths ----------------
 if ispc
     cfg.tensor_dir = 'D:\Desktop\portable_batch_package_dist\dist\dataset\tensors';
-    cfg.output_dir = fullfile(paths.package_root, 'output');
+    cfg.output_dir = fullfile(paths.package_root, 'output-test');
 else
     cfg.tensor_dir = '/public/home/sa23001064/xqy/acoustic-band-comsol/bspline/tensors';
     cfg.output_dir = fullfile(paths.package_root, 'output_linux');
@@ -78,6 +78,15 @@ cfg.solid_phase_value = 0;
 cfg.save_model = true;
 cfg.write_standard_outputs = true;
 cfg.verbose = true;
+cfg.split_band_and_fields_files = true;
+cfg.save_fields_for_sample_stride = 10;
+cfg.save_fields_for_sample_offset = 1;
+cfg.field_sample_count = 50;
+cfg.field_sample_k_bins = 10;
+cfg.field_sample_band_bins = 5;
+cfg.field_output_grid_resolution = 128;
+cfg.field_output_dtype = 'single';
+cfg.field_sampling_mode = 'stratified_random';
 
 % ---------------- Optional: run only a selected subset ----------------
 % Example 1:

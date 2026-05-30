@@ -684,6 +684,7 @@ end
 
 function result = runOneTensorCase(tensor_file, cfg, case_id)
 symmetry_group = InferBsplineSymmetryGroup(case_id);
+task_sequence_index = resolveTaskSequenceIndex(cfg, tensor_file, case_id);
 
 case_output_dir = fullfile(cfg.output_dir, case_id);
 if ~exist(case_output_dir, 'dir')
@@ -707,10 +708,46 @@ band_cfg = AcousticBandConfig( ...
     'density', cfg.density, ...
     'sound_speed', cfg.sound_speed, ...
     'solid_phase_value', cfg.solid_phase_value, ...
+    'split_band_and_fields_files', cfg.split_band_and_fields_files, ...
+    'save_fields_for_sample_stride', cfg.save_fields_for_sample_stride, ...
+    'save_fields_for_sample_offset', cfg.save_fields_for_sample_offset, ...
+    'field_sample_count', cfg.field_sample_count, ...
+    'field_sample_k_bins', cfg.field_sample_k_bins, ...
+    'field_sample_band_bins', cfg.field_sample_band_bins, ...
+    'field_output_grid_resolution', cfg.field_output_grid_resolution, ...
+    'field_output_dtype', cfg.field_output_dtype, ...
+    'field_sampling_mode', cfg.field_sampling_mode, ...
+    'task_sequence_index', task_sequence_index, ...
     'verbose', cfg.verbose);
 
 result = RunAcousticBandFromTensor(tensor_file, symmetry_group, ...
     cfg.unit_cell_length, band_cfg);
+end
+
+function task_sequence_index = resolveTaskSequenceIndex(cfg, tensor_file, case_id)
+task_sequence_index = [];
+
+if isfield(cfg, 'task_sequence_index_map') && isstruct(cfg.task_sequence_index_map)
+    map_struct = cfg.task_sequence_index_map;
+    case_key = matlab.lang.makeValidName(case_id);
+    tensor_key = matlab.lang.makeValidName(regexprep(char(string(tensor_file)), '[^A-Za-z0-9_]', '_'));
+    if isfield(map_struct, case_key)
+        task_sequence_index = map_struct.(case_key);
+        return;
+    end
+    if isfield(map_struct, tensor_key)
+        task_sequence_index = map_struct.(tensor_key);
+        return;
+    end
+end
+
+if isfield(cfg, 'tensor_files') && ~isempty(cfg.tensor_files)
+    files = cellstr(cfg.tensor_files(:));
+    match_index = find(strcmp(files, tensor_file), 1);
+    if ~isempty(match_index)
+        task_sequence_index = match_index;
+    end
+end
 end
 
 function files = listTensorFiles(cfg)
