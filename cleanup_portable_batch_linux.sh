@@ -17,6 +17,72 @@ else
 fi
 KILL_COMSOL_SERVER="true"
 
+find_worker_log_files() {
+    find "${OUTPUT_DIR}" -maxdepth 1 -type f \
+        \( -name 'worker_*.log' -o -name 'extra_*.log' \) \
+        -print 2>/dev/null || true
+}
+
+unique_pid_lines() {
+    awk 'NF { print $1 }' | sort -n -u
+}
+
+find_worker_pids() {
+    if ! command -v lsof >/dev/null 2>&1; then
+        return
+    fi
+
+    while read -r log_file; do
+        [[ -z "${log_file}" ]] && continue
+        lsof -t -- "${log_file}" 2>/dev/null || true
+    done < <(find_worker_log_files)
+}
+
+find_descendant_pids() {
+    local root_pids="$1"
+    local queue=()
+    local pid=""
+    local idx=0
+    declare -A seen=()
+
+    while read -r pid; do
+        pid="${pid//[[:space:]]/}"
+        [[ -z "${pid}" ]] && continue
+        if [[ -z "${seen[$pid]+x}" ]]; then
+            seen["$pid"]=1
+            queue+=("$pid")
+        fi
+    done <<< "${root_pids}"
+
+    while [[ "${idx}" -lt "${#queue[@]}" ]]; do
+        local parent_pid="${queue[$idx]}"
+        local child_pid=""
+        idx=$((idx + 1))
+
+        while read -r child_pid; do
+            child_pid="${child_pid//[[:space:]]/}"
+            [[ -z "${child_pid}" ]] && continue
+            if [[ -z "${seen[$child_pid]+x}" ]]; then
+                seen["$child_pid"]=1
+                queue+=("$child_pid")
+                echo "${child_pid}"
+            fi
+        done < <(ps -o pid= --ppid "${parent_pid}" 2>/dev/null || true)
+    done
+}
+
+signal_group() {
+    local signal_name="$1"
+    local pids="$2"
+    if [[ -z "${pids}" ]]; then
+        return
+    fi
+    while read -r pid; do
+        [[ -z "${pid}" ]] && continue
+        kill "-${signal_name}" "${pid}" 2>/dev/null || true
+    done <<< "${pids}"
+}
+
 if [[ ! -d "${OUTPUT_DIR}" ]]; then
     echo "Output directory does not exist: ${OUTPUT_DIR}"
 else
@@ -27,16 +93,21 @@ else
 fi
 
 if [[ "${KILL_COMSOL_SERVER}" == "true" ]]; then
-    if command -v pgrep >/dev/null 2>&1; then
-        PIDS="$(pgrep -u "${USER}" -f 'comsolmphserver' || true)"
-        if [[ -n "${PIDS}" ]]; then
-            echo "Stopping comsolmphserver processes: ${PIDS}"
-            pkill -u "${USER}" -f 'comsolmphserver' || true
+    if command -v lsof >/dev/null 2>&1; then
+        MATLAB_PIDS="$(find_worker_pids | unique_pid_lines)"
+        CHILD_PIDS="$(find_descendant_pids "${MATLAB_PIDS}" | unique_pid_lines)"
+        if [[ -n "${MATLAB_PIDS}${CHILD_PIDS}" ]]; then
+            echo "Stopping batch worker processes: ${MATLAB_PIDS}"
+            if [[ -n "${CHILD_PIDS}" ]]; then
+                echo "Stopping batch child processes: ${CHILD_PIDS}"
+            fi
+            signal_group TERM "${CHILD_PIDS}"
+            signal_group TERM "${MATLAB_PIDS}"
         else
-            echo "No comsolmphserver process found for user ${USER}"
+            echo "No batch worker or child processes found for ${OUTPUT_DIR}"
         fi
     else
-        echo "pgrep/pkill not available; skipped comsolmphserver cleanup"
+        echo "lsof not available; skipped worker process cleanup"
     fi
 fi
 
