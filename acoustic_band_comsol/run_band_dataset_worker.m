@@ -450,6 +450,10 @@ function state = startIsolatedServer(cfg, state)
 comsol_root = resolveComsolRoot(cfg);
 host = resolveConfigString(cfg, 'comsol_host', '127.0.0.1');
 comsol_np = resolveConfigNumeric(cfg, 'comsol_np', 0);
+hide_server_window = false;
+if ispc
+    hide_server_window = resolveConfigLogical(cfg, 'comsol_hide_server_window', true);
+end
 startup_lock = fullfile(cfg.output_dir, '.comsol_server_start.lock');
 startup_timeout_s = resolveConfigNumeric(cfg, 'comsol_server_start_lock_timeout_s', 300);
 retry_limit = resolveConfigNumeric(cfg, 'comsol_server_start_retry_limit', 4);
@@ -475,14 +479,26 @@ for attempt = 1:(retry_limit + 1)
         if comsol_np > 0
             start_args = [start_args, {'np', comsol_np}];
         end
+        if ispc && hide_server_window
+            start_args = [start_args, {'hide', 'on'}];
+        end
         server_port = mphstartcomsolmphserver(start_args{:});
 
         if cfg.verbose
             if comsol_np > 0
-                fprintf('[worker-init] Started isolated COMSOL server on %s:%d with np=%d\n', ...
-                    host, server_port, comsol_np);
+                if ispc && hide_server_window
+                    fprintf('[worker-init] Started isolated COMSOL server on %s:%d with np=%d hide=on\n', ...
+                        host, server_port, comsol_np);
+                else
+                    fprintf('[worker-init] Started isolated COMSOL server on %s:%d with np=%d\n', ...
+                        host, server_port, comsol_np);
+                end
             else
-                fprintf('[worker-init] Started isolated COMSOL server on %s:%d\n', host, server_port);
+                if ispc && hide_server_window
+                    fprintf('[worker-init] Started isolated COMSOL server on %s:%d hide=on\n', host, server_port);
+                else
+                    fprintf('[worker-init] Started isolated COMSOL server on %s:%d\n', host, server_port);
+                end
             end
         end
 
@@ -619,6 +635,13 @@ function value = resolveConfigNumeric(cfg, field_name, default_value)
 value = default_value;
 if isfield(cfg, field_name) && ~isempty(cfg.(field_name))
     value = cfg.(field_name);
+end
+end
+
+function value = resolveConfigLogical(cfg, field_name, default_value)
+value = default_value;
+if isfield(cfg, field_name) && ~isempty(cfg.(field_name))
+    value = logical(cfg.(field_name));
 end
 end
 

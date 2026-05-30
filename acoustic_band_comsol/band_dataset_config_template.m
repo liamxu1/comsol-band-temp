@@ -23,6 +23,7 @@ cfg.comsol_host = '127.0.0.1';
 cfg.comsol_port = 2036;
 cfg.comsol_reuse_existing_server = false;
 cfg.comsol_np = 0;
+cfg.comsol_hide_server_window = ispc;
 cfg.enable_worker_comsol_recovery = true;
 cfg.case_infra_retry_limit = 1;
 cfg.worker_infra_failure_limit = 3;

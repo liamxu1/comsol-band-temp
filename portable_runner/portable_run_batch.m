@@ -28,6 +28,9 @@ end
 if isfield(cfg, 'comsol_np')
     fprintf('  comsol_np: %d\n', cfg.comsol_np);
 end
+if isfield(cfg, 'comsol_hide_server_window')
+    fprintf('  comsol_hide_server_window: %d\n', cfg.comsol_hide_server_window);
+end
 fprintf('  enable_worker_comsol_recovery: %d\n', cfg.enable_worker_comsol_recovery);
 fprintf('  case_infra_retry_limit: %d\n', cfg.case_infra_retry_limit);
 fprintf('  worker_infra_failure_limit: %d\n', cfg.worker_infra_failure_limit);

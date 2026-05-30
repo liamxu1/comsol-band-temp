@@ -155,6 +155,7 @@ cfg.comsol_mli_dir = fullfile(cfg.comsol_root, 'mli');
 cfg.comsol_host = '127.0.0.1';
 cfg.comsol_reuse_existing_server = false;
 cfg.comsol_np = 2;
+cfg.comsol_hide_server_window = true;
 cfg.enable_worker_comsol_recovery = true;
 cfg.case_infra_retry_limit = 1;
 cfg.worker_infra_failure_limit = 3;
@@ -180,6 +181,9 @@ cfg.worker_healthcheck_before_claim = true;
   - 限制每个 worker 自己启动的 COMSOL server 使用多少个核
   - `0` 表示不显式限制，交给 COMSOL 默认行为
   - 只有 `comsol_reuse_existing_server = false` 时才生效
+- `comsol_hide_server_window = true`
+  - Windows 下隐藏每个 worker 启动的 COMSOL server 命令窗口
+  - Linux 上忽略这个选项
 - `enable_worker_comsol_recovery = true`
   - worker 遇到 COMSOL 连接失效、server 崩溃或 OOM 类异常时尝试恢复
 - `case_infra_retry_limit = 1`
