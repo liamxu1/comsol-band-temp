@@ -449,6 +449,7 @@ end
 function state = startIsolatedServer(cfg, state)
 comsol_root = resolveComsolRoot(cfg);
 host = resolveConfigString(cfg, 'comsol_host', '127.0.0.1');
+comsol_np = resolveConfigNumeric(cfg, 'comsol_np', 0);
 startup_lock = fullfile(cfg.output_dir, '.comsol_server_start.lock');
 startup_timeout_s = resolveConfigNumeric(cfg, 'comsol_server_start_lock_timeout_s', 300);
 retry_limit = resolveConfigNumeric(cfg, 'comsol_server_start_retry_limit', 4);
@@ -470,12 +471,19 @@ for attempt = 1:(retry_limit + 1)
     server_port = [];
 
     try
-        server_port = mphstartcomsolmphserver( ...
-            'comsolpath', comsol_root, ...
-            'silent', 'on');
+        start_args = {'comsolpath', comsol_root, 'silent', 'on'};
+        if comsol_np > 0
+            start_args = [start_args, {'np', comsol_np}];
+        end
+        server_port = mphstartcomsolmphserver(start_args{:});
 
         if cfg.verbose
-            fprintf('[worker-init] Started isolated COMSOL server on %s:%d\n', host, server_port);
+            if comsol_np > 0
+                fprintf('[worker-init] Started isolated COMSOL server on %s:%d with np=%d\n', ...
+                    host, server_port, comsol_np);
+            else
+                fprintf('[worker-init] Started isolated COMSOL server on %s:%d\n', host, server_port);
+            end
         end
 
         mphstart(host, server_port, comsol_root);

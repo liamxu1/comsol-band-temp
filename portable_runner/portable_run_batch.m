@@ -33,6 +33,9 @@ fprintf('  comsol_root: %s\n', cfg.comsol_root);
 if isfield(cfg, 'comsol_mli_dir') && ~isempty(cfg.comsol_mli_dir)
     fprintf('  comsol_mli_dir: %s\n', cfg.comsol_mli_dir);
 end
+if isfield(cfg, 'comsol_np')
+    fprintf('  comsol_np: %d\n', cfg.comsol_np);
+end
 fprintf('  enable_worker_comsol_recovery: %d\n', cfg.enable_worker_comsol_recovery);
 fprintf('  case_infra_retry_limit: %d\n', cfg.case_infra_retry_limit);
 fprintf('  worker_infra_failure_limit: %d\n', cfg.worker_infra_failure_limit);

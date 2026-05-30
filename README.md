@@ -164,6 +164,7 @@ cfg.comsol_root = 'D:\Software\COMSOL\COMSOL63\Multiphysics';
 cfg.comsol_mli_dir = fullfile(cfg.comsol_root, 'mli');
 cfg.comsol_host = '127.0.0.1';
 cfg.comsol_reuse_existing_server = false;
+cfg.comsol_np = 2;
 cfg.enable_worker_comsol_recovery = true;
 cfg.case_infra_retry_limit = 1;
 cfg.worker_infra_failure_limit = 3;
@@ -185,6 +186,10 @@ cfg.worker_healthcheck_before_claim = true;
 - `comsol_reuse_existing_server = false`
   - 默认每个 worker 使用独立 server
   - 不推荐多个 worker 共享同一个 server
+- `comsol_np = 2`
+  - 限制每个 worker 自己启动的 COMSOL server 使用多少个核
+  - `0` 表示不显式限制，交给 COMSOL 默认行为
+  - 只有 `comsol_reuse_existing_server = false` 时才生效
 - `enable_worker_comsol_recovery = true`
   - worker 遇到 COMSOL 连接失效、server 崩溃或 OOM 类异常时尝试恢复
 - `case_infra_retry_limit = 1`
@@ -203,6 +208,12 @@ cfg.comsol_reuse_existing_server = true;
 cfg.comsol_host = '127.0.0.1';
 cfg.comsol_port = 2036;
 ```
+
+说明：
+
+- 这时 `cfg.comsol_np` 不会生效
+- 因为 worker 不再启动新 server，而是连接你事先已经启动好的共享 server
+- 如果要限制共享 server 的核数，需要在你手动启动那个 COMSOL server 时设置
 
 ### 4.2 输出路径
 
@@ -228,6 +239,15 @@ cfg.worker_count = 2;
 
 - 不是单个 COMSOL 求解器内部多线程
 - 而是同时启动多个 MATLAB 进程
+
+推荐和 `cfg.comsol_np` 配合考虑：
+
+- 总预算先按 `worker_count * comsol_np` 估算
+- 对当前这类任务，通常更建议“多 worker、少核/worker”
+- 在 64 核机器上可先试：
+  - `cfg.worker_count = 16; cfg.comsol_np = 2;`
+  - `cfg.worker_count = 12; cfg.comsol_np = 3;`
+  - `cfg.worker_count = 8; cfg.comsol_np = 4;`
 
 ## 5. Linux 无 GUI 启动
 
