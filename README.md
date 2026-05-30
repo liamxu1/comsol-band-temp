@@ -154,6 +154,7 @@ cfg.comsol_root = 'D:\Software\COMSOL\COMSOL63\Multiphysics';
 cfg.comsol_mli_dir = fullfile(cfg.comsol_root, 'mli');
 cfg.comsol_host = '127.0.0.1';
 cfg.comsol_reuse_existing_server = false;
+cfg.comsol_np = 2;
 cfg.enable_worker_comsol_recovery = true;
 cfg.case_infra_retry_limit = 1;
 cfg.worker_infra_failure_limit = 3;
@@ -175,6 +176,10 @@ cfg.worker_healthcheck_before_claim = true;
 - `comsol_reuse_existing_server = false`
   - 默认每个 worker 使用独立 server
   - 不推荐多个 worker 共享同一个 server
+- `comsol_np = 2`
+  - 限制每个 worker 自己启动的 COMSOL server 使用多少个核
+  - `0` 表示不显式限制，交给 COMSOL 默认行为
+  - 只有 `comsol_reuse_existing_server = false` 时才生效
 - `enable_worker_comsol_recovery = true`
   - worker 遇到 COMSOL 连接失效、server 崩溃或 OOM 类异常时尝试恢复
 - `case_infra_retry_limit = 1`
@@ -193,6 +198,12 @@ cfg.comsol_reuse_existing_server = true;
 cfg.comsol_host = '127.0.0.1';
 cfg.comsol_port = 2036;
 ```
+
+说明：
+
+- 这时 `cfg.comsol_np` 不会生效
+- 因为 worker 不再启动新 server，而是连接你事先已经启动好的共享 server
+- 如果要限制共享 server 的核数，需要在你手动启动那个 COMSOL server 时设置
 
 ### 4.2 输出路径
 
@@ -225,6 +236,8 @@ cfg.worker_count = 2;
 - 先从 `2` 开始
 - 机器内存足够再试 `3` 或 `4`
 - 如果每个 case 很重，不要盲目开太多
+- 结合 `cfg.comsol_np` 一起估算总预算
+- 对 64 核机器可先试 `cfg.worker_count = 20; cfg.comsol_np = 2;`
 
 ### 4.4 分辨率、k 点数、band 数
 
@@ -321,6 +334,34 @@ portable_run_batch
 - 不要手动双击 `output/launch_worker_01.bat` 之类的文件
 - 这些只是主程序自动生成的 worker 启动脚本
 - 推荐入口始终是 `COMSOL with MATLAB` 主会话里的 `portable_run_batch`
+
+### 5.1 Windows 清锁与停 worker
+
+仓库新增 Windows 管理脚本：
+
+- `cleanup_portable_batch_windows.bat`
+- `cleanup_portable_batch_windows.ps1`
+- `control_workers_windows.bat`
+- `control_workers_windows.ps1`
+
+用途：
+
+- `cleanup_portable_batch_windows`
+  - 删除输出目录下的 `.lock`、`.batch_summary.lock`、`.comsol_server_start.lock`
+  - 停止和该 `output_dir` 对应的 MATLAB worker 及其子进程
+- `control_workers_windows`
+  - `status`：查看匹配到的 worker 和子进程
+  - `stop`：停止匹配到的 worker 和子进程
+
+用法：
+
+```bat
+cleanup_portable_batch_windows.bat output
+control_workers_windows.bat output status
+control_workers_windows.bat output stop
+```
+
+如果你输出目录不是默认的 `output`，把第一个参数换成对应目录名或绝对路径即可。
 
 ## 6. 输出结构
 
@@ -473,5 +514,5 @@ bspline/acoustic_band_comsol/portable_batch_package/dist
 
 如果你愿意，我下一步可以继续帮你做两件事之一：
 
-1. 再给这个包补一个 Windows PowerShell 启动脚本
+1. 给 Windows 版再补一个可传参的 PowerShell 启动脚本
 2. 直接把 `dist/` 实际生成出来并检查目录内容

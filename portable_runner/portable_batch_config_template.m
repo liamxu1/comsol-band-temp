@@ -34,6 +34,7 @@ cfg.comsol_mli_dir = fullfile(cfg.comsol_root, 'mli');
 cfg.comsol_host = '127.0.0.1';
 cfg.comsol_port = 2036;
 cfg.comsol_reuse_existing_server = false;
+cfg.comsol_np = 2;
 cfg.enable_worker_comsol_recovery = true;
 cfg.case_infra_retry_limit = 1;
 cfg.worker_infra_failure_limit = 3;
@@ -89,4 +90,5 @@ cfg.verbose = true;
 % cfg.comsol_reuse_existing_server = true;
 % cfg.comsol_host = '127.0.0.1';
 % cfg.comsol_port = 2036;
+% cfg.comsol_np = 0; % ignored when reusing an already-running shared server
 end
