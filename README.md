@@ -258,7 +258,7 @@ cfg.worker_count = 2;
 启动脚本支持外部传参：
 
 ```bash
-./start_portable_batch_linux.sh [start] [end] [worker_count] [output_dir_name]
+./start_portable_batch_linux.sh [start] [end] [worker_count] [output_dir_name] [comsol_np]
 ```
 
 你当前环境的默认值已经写成：
@@ -268,6 +268,7 @@ cfg.worker_count = 2;
 - `TENSOR_DIR=/public/home/sa23001064/xqy/acoustic-band-comsol/bspline/tensors`
 - `output_dir_name=output`
 - `worker_count=2`
+- `comsol_np=2`
 
 启动方式：
 
@@ -292,7 +293,7 @@ cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
 如果你想只跑某个范围，并同时指定 worker 数和输出目录名：
 
 ```bash
-./start_portable_batch_linux.sh 1 100 4 run_001
+./start_portable_batch_linux.sh 1 100 4 run_001 2
 ```
 
 那么实际输出目录会是：
@@ -304,10 +305,66 @@ cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
 如果你不分片，只想改 worker 数：
 
 ```bash
-./start_portable_batch_linux.sh "" "" 4 output
+./start_portable_batch_linux.sh "" "" 4 output 2
 ```
 
-## 6. Linux 清锁与残留 server 清理
+如果你是在 `SLURM` 作业里跑，不建议用这个脚本。  
+它会让 host MATLAB 很快退出，并用 `nohup` 把 worker 放到后台；在 `SLURM` 里，作业一结束，这些后台进程通常也会被一起清掉。
+
+## 6. SLURM 启动
+
+对于 `SLURM`，仓库新增专用入口：
+
+- `start_portable_batch_slurm.sh`
+
+它和普通 Linux 入口的区别是：
+
+- 先生成 `batch_config.mat`
+- 再由前台 shell 直接托管所有 worker
+- 脚本会一直 `wait` 到所有 worker 完成
+- 不依赖 `nohup` 挂后台
+
+用法：
+
+```bash
+./start_portable_batch_slurm.sh [start] [end] [worker_count] [output_dir_name] [comsol_np]
+```
+
+例如：
+
+```bash
+./start_portable_batch_slurm.sh 1 100 16 run_001 2
+```
+
+这表示：
+
+- 跑第 `1..100` 个任务
+- 启动 `16` 个 worker
+- 每个 worker 启动自己的 COMSOL server，并传 `np=2`
+- 输出目录为 `<repo>/run_001_1-100`
+
+推荐的 `sbatch` 脚本形态是单作业托管全部 worker，例如：
+
+```bash
+#!/usr/bin/env bash
+#SBATCH -J comsol-band
+#SBATCH -N 1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=0
+#SBATCH -o slurm-%j.out
+
+cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
+./start_portable_batch_slurm.sh 1 100 16 run_001 2
+```
+
+建议：
+
+- `--cpus-per-task` 至少覆盖 `worker_count * comsol_np`
+- 还要给 MATLAB / Java / COMSOL 额外线程留一点余量
+- 如果你想更稳，先按总预算 `24-40` 核试跑
+
+## 7. Linux 清锁与残留 server 清理
 
 仓库提供清理脚本：
 
@@ -334,7 +391,7 @@ cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
 ./cleanup_portable_batch_linux.sh run_001_1-100
 ```
 
-## 7. Linux 动态加 worker / 暂停恢复
+## 8. Linux 动态加 worker / 暂停恢复
 
 对于已经启动的一个批次，可以不重启 host，直接追加 worker：
 
