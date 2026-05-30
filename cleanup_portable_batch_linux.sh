@@ -3,8 +3,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Change this if you launch to another output directory.
-OUTPUT_DIR="${SCRIPT_DIR}/output_linux"
+# Usage:
+#   ./cleanup_portable_batch_linux.sh [output_dir]
+# Examples:
+#   ./cleanup_portable_batch_linux.sh
+#   ./cleanup_portable_batch_linux.sh output
+#   ./cleanup_portable_batch_linux.sh run_001_1-100
+OUTPUT_DIR_ARG="${1:-output}"
+if [[ "${OUTPUT_DIR_ARG}" = /* ]]; then
+    OUTPUT_DIR="${OUTPUT_DIR_ARG}"
+else
+    OUTPUT_DIR="${SCRIPT_DIR}/${OUTPUT_DIR_ARG}"
+fi
 KILL_COMSOL_SERVER="true"
 
 if [[ ! -d "${OUTPUT_DIR}" ]]; then

@@ -36,6 +36,8 @@ portable_batch_package/
   README.md
   start_portable_batch_windows.bat
   start_portable_batch_linux.sh
+  add_workers_linux.sh
+  control_workers_linux.sh
   cleanup_portable_batch_linux.sh
   portable_runner/
     portable_add_paths.m
@@ -233,28 +235,31 @@ cfg.worker_count = 2;
 
 - `start_portable_batch_linux.sh`
 
-脚本顶部可直接改这些外层参数：
+启动脚本支持外部传参：
 
-- `MATLAB_BIN`
-- `COMSOL_ROOT`
-- `TENSOR_DIR`
-- `OUTPUT_DIR`
-- `TASK_INDEX_START`
-- `TASK_INDEX_END`
-- `WORKER_COUNT`
+```bash
+./start_portable_batch_linux.sh [start] [end] [worker_count] [output_dir_name]
+```
 
 你当前环境的默认值已经写成：
 
 - `MATLAB_BIN=/public/home/sa23001064/matlab2025a/bin/matlab`
 - `COMSOL_ROOT=/public/home/sa23001064/COMSOL`
 - `TENSOR_DIR=/public/home/sa23001064/xqy/acoustic-band-comsol/bspline/tensors`
-- `OUTPUT_DIR=<repo>/output_linux`
+- `output_dir_name=output`
+- `worker_count=2`
 
 启动方式：
 
 ```bash
 cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
 ./start_portable_batch_linux.sh
+```
+
+不传 `start/end` 时，默认输出目录就是：
+
+```text
+<repo>/output
 ```
 
 说明：
@@ -264,17 +269,22 @@ cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
 - 每个 worker 会自行启动独立 `comsolmphserver`
 - 不需要图形界面，也不需要手动点击 `COMSOL with MATLAB`
 
-如果你想只跑某个范围，直接改：
+如果你想只跑某个范围，并同时指定 worker 数和输出目录名：
 
 ```bash
-TASK_INDEX_START="1"
-TASK_INDEX_END="100"
+./start_portable_batch_linux.sh 1 100 4 run_001
 ```
 
-如果想换输出目录，直接改：
+那么实际输出目录会是：
+
+```text
+<repo>/run_001_1-100
+```
+
+如果你不分片，只想改 worker 数：
 
 ```bash
-OUTPUT_DIR="/public/home/sa23001064/xqy/acoustic-band-comsol/output/run_001"
+./start_portable_batch_linux.sh "" "" 4 output
 ```
 
 ## 6. Linux 清锁与残留 server 清理
@@ -297,7 +307,47 @@ cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
 ./cleanup_portable_batch_linux.sh
 ```
 
-如果你的输出目录不是默认的 `output_linux`，先改脚本顶部的 `OUTPUT_DIR`。
+也可以直接指定输出目录：
+
+```bash
+./cleanup_portable_batch_linux.sh output
+./cleanup_portable_batch_linux.sh run_001_1-100
+```
+
+## 7. Linux 动态加 worker / 暂停恢复
+
+对于已经启动的一个批次，可以不重启 host，直接追加 worker：
+
+- `add_workers_linux.sh`
+
+用法：
+
+```bash
+cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
+./add_workers_linux.sh output 2
+```
+
+它会读取该输出目录下已有的 `batch_config.mat`，并额外启动若干个新的 MATLAB worker。  
+这些新增 worker 会继续使用同一套 `.lock` 机制抢任务，所以可以安全地并到当前批次里。
+
+如果想查看、暂停、恢复或停止当前批次的 worker：
+
+- `control_workers_linux.sh`
+
+用法：
+
+```bash
+./control_workers_linux.sh output status
+./control_workers_linux.sh output pause
+./control_workers_linux.sh output resume
+./control_workers_linux.sh output stop
+```
+
+说明：
+
+- `pause` / `resume` 是向匹配到的 MATLAB worker 和 `comsolmphserver` 发送 `SIGSTOP` / `SIGCONT`
+- `stop` 是发送 `SIGTERM`
+- `stop` 之后如果某些 case 留下 `.lock`，再执行 `cleanup_portable_batch_linux.sh`
 - 每个进程自动抢占不同样本
 
 建议：
