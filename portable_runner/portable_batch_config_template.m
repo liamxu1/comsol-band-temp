@@ -66,9 +66,9 @@ cfg.solid_phase_value = 0;
 %   tensor/mat image white region (mat==0) is treated as solid
 
 % ---------------- Output controls ----------------
-cfg.save_model = true;
-cfg.write_standard_outputs = true;
-cfg.verbose = true;
+cfg.save_model = false;
+cfg.write_standard_outputs = false;
+cfg.verbose = false;
 cfg.split_band_and_fields_files = true;
 cfg.save_fields_for_sample_stride = 10;
 cfg.save_fields_for_sample_offset = 1;
