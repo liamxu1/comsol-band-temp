@@ -23,8 +23,8 @@ WORKER_COUNT="${3:-2}"
 OUTPUT_DIR_NAME="${4:-output}"
 
 # ---------------- Optional simulation overrides ----------------
-SAVE_MODEL="true"
-WRITE_STANDARD_OUTPUTS="true"
+SAVE_MODEL="false"
+WRITE_STANDARD_OUTPUTS="false"
 VERBOSE="true"
 
 if [[ -n "${TASK_INDEX_START}" && ! "${TASK_INDEX_START}" =~ ^[0-9]+$ ]]; then
