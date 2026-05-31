@@ -18,9 +18,9 @@ summary.worker_id = worker_id;
 summary.output_dir = cfg.output_dir;
 summary.worker_exit_reason = '';
 summary.records = repmat(buildCaseRecord('', ''), 0, 1);
+claim_mode = 'cursor';
 
-for i = 1:numel(task_files)
-    tensor_file = task_files{i};
+while true
 
     if cfg.worker_healthcheck_before_claim
         [state, ready, exit_reason] = ensureWorkerReadyForClaim(cfg, state);
@@ -30,9 +30,10 @@ for i = 1:numel(task_files)
         end
     end
 
-    [claimed, lock_file, case_id] = tryClaimCase(tensor_file, cfg, worker_id);
+    [claimed, lock_file, case_id, tensor_file, claim_mode] = claimNextCase( ...
+        task_files, cfg, worker_id, claim_mode);
     if ~claimed
-        continue;
+        break;
     end
 
     record = buildCaseRecord(case_id, tensor_file);
@@ -70,6 +71,8 @@ for i = 1:numel(task_files)
         end
     end
 end
+
+refreshBatchSummarySnapshotNow(cfg);
 
 summary.completed = numel(summary.records);
 summary.ok_count = sum(strcmp({summary.records.status}, 'ok'));
@@ -218,6 +221,90 @@ while true
         end
     end
 end
+end
+
+function [claimed, lock_file, case_id, tensor_file, claim_mode] = claimNextCase( ...
+        task_files, cfg, worker_id, claim_mode)
+claimed = false;
+lock_file = '';
+case_id = '';
+tensor_file = '';
+
+if strcmpi(claim_mode, 'cursor')
+    [claimed, lock_file, case_id, tensor_file, exhausted] = ...
+        claimNextCaseFromCursor(task_files, cfg, worker_id);
+    if claimed
+        return;
+    end
+    if exhausted
+        claim_mode = 'rescan';
+    end
+end
+
+if strcmpi(claim_mode, 'rescan')
+    [claimed, lock_file, case_id, tensor_file] = ...
+        tryClaimAnyCaseByScan(task_files, cfg, worker_id);
+end
+end
+
+function [claimed, lock_file, case_id, tensor_file, exhausted] = ...
+        claimNextCaseFromCursor(task_files, cfg, worker_id)
+claimed = false;
+lock_file = '';
+case_id = '';
+tensor_file = '';
+exhausted = false;
+task_count = numel(task_files);
+
+while true
+    [task_index, exhausted] = reserveNextTaskIndex(cfg, task_count);
+    if exhausted
+        return;
+    end
+
+    tensor_file = task_files{task_index};
+    [claimed, lock_file, case_id] = tryClaimCase(tensor_file, cfg, worker_id);
+    if claimed
+        return;
+    end
+end
+end
+
+function [claimed, lock_file, case_id, tensor_file] = tryClaimAnyCaseByScan( ...
+        task_files, cfg, worker_id)
+claimed = false;
+lock_file = '';
+case_id = '';
+tensor_file = '';
+
+for i = 1:numel(task_files)
+    candidate_file = task_files{i};
+    [claimed, lock_file, case_id] = tryClaimCase(candidate_file, cfg, worker_id);
+    if claimed
+        tensor_file = candidate_file;
+        return;
+    end
+end
+end
+
+function [task_index, exhausted] = reserveNextTaskIndex(cfg, task_count)
+task_index = [];
+exhausted = false;
+
+cursor_lock_file = fullfile(cfg.output_dir, '.task_cursor.lock');
+cursor_file = fullfile(cfg.output_dir, '.task_cursor.txt');
+cleanup = acquireLocalLock(cursor_lock_file);
+next_index = readScalarCounter(cursor_file, 1);
+
+if next_index > task_count
+    exhausted = true;
+    clear cleanup;
+    return;
+end
+
+task_index = next_index;
+writeScalarCounter(cursor_file, next_index + 1);
+clear cleanup;
 end
 
 function [state, ready, exit_reason] = ensureWorkerReadyForClaim(cfg, state)
@@ -843,20 +930,135 @@ end
 
 function updateBatchSummaryRecord(cfg, record, worker_id, has_lock, has_done, has_band_mat)
 summary_file = fullfile(cfg.output_dir, 'batch_summary.csv');
+events_file = fullfile(cfg.output_dir, 'batch_summary_events.csv');
 lock_file = fullfile(cfg.output_dir, '.batch_summary.lock');
+event_count_file = fullfile(cfg.output_dir, '.batch_summary_event_count.txt');
+snapshot_marker_file = fullfile(cfg.output_dir, '.batch_summary_snapshot_event_count.txt');
 cleanup = acquireLocalLock(lock_file);
 
-rows = readBatchSummaryRows(summary_file);
+bootstrapBatchSummaryEvents(summary_file, events_file, event_count_file, snapshot_marker_file);
+
 row = buildBatchSummaryRow(record, worker_id, has_lock, has_done, has_band_mat);
-case_ids = rows(:, 1);
-row_index = find(strcmp(case_ids, record.case_id), 1);
-if isempty(row_index)
-    rows(end + 1, :) = row;
-else
-    rows(row_index, :) = row;
+appendBatchSummaryRow(events_file, row);
+event_count = readScalarCounter(event_count_file, 0) + 1;
+writeScalarCounter(event_count_file, event_count);
+
+if shouldRefreshBatchSummarySnapshot(cfg, has_done, event_count, summary_file, snapshot_marker_file)
+    refreshBatchSummarySnapshot(summary_file, events_file);
+    writeScalarCounter(snapshot_marker_file, event_count);
 end
-writeBatchSummaryRows(summary_file, rows);
 clear cleanup;
+end
+
+function bootstrapBatchSummaryEvents( ...
+        summary_file, events_file, event_count_file, snapshot_marker_file)
+if exist(events_file, 'file') == 2 || exist(summary_file, 'file') ~= 2
+    return;
+end
+
+rows = readBatchSummaryRows(summary_file);
+if isempty(rows)
+    writeScalarCounter(event_count_file, 0);
+    writeScalarCounter(snapshot_marker_file, 0);
+    return;
+end
+
+writeBatchSummaryRows(events_file, rows);
+bootstrap_count = size(rows, 1);
+writeScalarCounter(event_count_file, bootstrap_count);
+writeScalarCounter(snapshot_marker_file, bootstrap_count);
+end
+
+function appendBatchSummaryRow(summary_file, row)
+write_header = exist(summary_file, 'file') ~= 2;
+fid = fopen(summary_file, 'a');
+if fid < 0
+    error('run_band_dataset_worker:BatchSummaryOpenFailed', ...
+        'Cannot open batch summary file for appending: %s', summary_file);
+end
+cleanup = onCleanup(@() fclose(fid));
+
+if write_header
+    fprintf(fid, ['case_id,status,worker_id,has_lock,has_done,has_band_mat,elapsed_s,', ...
+        'dataset_file,message,tensor_file,failure_kind,infra_recovery_attempts,', ...
+        'worker_exit_reason\n']);
+end
+
+fprintf(fid, '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n', ...
+    csvField(row{1}), ...
+    csvField(row{2}), ...
+    csvField(row{3}), ...
+    csvField(row{4}), ...
+    csvField(row{5}), ...
+    csvField(row{6}), ...
+    csvField(row{7}), ...
+    csvField(row{8}), ...
+    csvField(row{9}), ...
+    csvField(row{10}), ...
+    csvField(row{11}), ...
+    csvField(row{12}), ...
+    csvField(row{13}));
+clear cleanup;
+end
+
+function tf = shouldRefreshBatchSummarySnapshot( ...
+        cfg, has_done, event_count, summary_file, snapshot_marker_file)
+tf = false;
+if exist(summary_file, 'file') ~= 2
+    tf = true;
+    return;
+end
+if ~has_done
+    return;
+end
+
+refresh_every = resolveConfigNumeric(cfg, 'batch_summary_snapshot_every_n_events', 40);
+refresh_every = max(1, round(refresh_every));
+last_snapshot_event_count = readScalarCounter(snapshot_marker_file, 0);
+tf = (event_count - last_snapshot_event_count) >= refresh_every;
+end
+
+function refreshBatchSummarySnapshotNow(cfg)
+summary_file = fullfile(cfg.output_dir, 'batch_summary.csv');
+events_file = fullfile(cfg.output_dir, 'batch_summary_events.csv');
+lock_file = fullfile(cfg.output_dir, '.batch_summary.lock');
+snapshot_marker_file = fullfile(cfg.output_dir, '.batch_summary_snapshot_event_count.txt');
+event_count_file = fullfile(cfg.output_dir, '.batch_summary_event_count.txt');
+
+if exist(events_file, 'file') ~= 2
+    return;
+end
+
+cleanup = acquireLocalLock(lock_file);
+refreshBatchSummarySnapshot(summary_file, events_file);
+writeScalarCounter(snapshot_marker_file, readScalarCounter(event_count_file, 0));
+clear cleanup;
+end
+
+function refreshBatchSummarySnapshot(summary_file, events_file)
+rows = readBatchSummaryRows(events_file);
+rows = collapseBatchSummaryRows(rows);
+writeBatchSummaryRows(summary_file, rows);
+end
+
+function rows = collapseBatchSummaryRows(event_rows)
+column_count = 13;
+rows = cell(0, column_count);
+if isempty(event_rows)
+    return;
+end
+
+case_index_map = containers.Map('KeyType', 'char', 'ValueType', 'double');
+for i = 1:size(event_rows, 1)
+    row = event_rows(i, :);
+    case_id = char(string(row{1}));
+    if isKey(case_index_map, case_id)
+        rows(case_index_map(case_id), :) = row;
+    else
+        rows(end + 1, :) = row; %#ok<AGROW>
+        case_index_map(case_id) = size(rows, 1);
+    end
+end
 end
 
 function cleanup = acquireLocalLock(lock_file)
@@ -994,6 +1196,41 @@ while i <= line_length
 end
 
 row{end + 1} = current;
+end
+
+function value = readScalarCounter(counter_file, default_value)
+value = default_value;
+if exist(counter_file, 'file') ~= 2
+    return;
+end
+
+fid = fopen(counter_file, 'r');
+if fid < 0
+    return;
+end
+cleanup = onCleanup(@() fclose(fid));
+raw = fgetl(fid);
+if ~ischar(raw)
+    clear cleanup;
+    return;
+end
+
+parsed = str2double(strtrim(raw));
+if isfinite(parsed)
+    value = parsed;
+end
+clear cleanup;
+end
+
+function writeScalarCounter(counter_file, value)
+fid = fopen(counter_file, 'w');
+if fid < 0
+    error('run_band_dataset_worker:CounterWriteFailed', ...
+        'Cannot write counter file: %s', counter_file);
+end
+cleanup = onCleanup(@() fclose(fid));
+fprintf(fid, '%d\n', round(value));
+clear cleanup;
 end
 
 function value = sanitizeDoneValue(value)

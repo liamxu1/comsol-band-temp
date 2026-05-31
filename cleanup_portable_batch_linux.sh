@@ -88,8 +88,11 @@ if [[ ! -d "${OUTPUT_DIR}" ]]; then
 else
     echo "Removing lock directories under ${OUTPUT_DIR}"
     find "${OUTPUT_DIR}" \
-        \( -type d -name '.lock' -o -type d -name '.batch_summary.lock' -o -type d -name '.comsol_server_start.lock' \) \
+        \( -type d -name '.lock' -o -type d -name '.batch_summary.lock' -o -type d -name '.comsol_server_start.lock' -o -type d -name '.task_cursor.lock' \) \
         -print -exec rm -rf {} +
+    find "${OUTPUT_DIR}" -maxdepth 1 -type f \
+        \( -name '.task_cursor.txt' -o -name '.batch_summary_event_count.txt' -o -name '.batch_summary_snapshot_event_count.txt' \) \
+        -print -delete
 fi
 
 if [[ "${KILL_COMSOL_SERVER}" == "true" ]]; then

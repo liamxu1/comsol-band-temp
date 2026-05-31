@@ -375,6 +375,9 @@ cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
 - 删除 `output_dir` 下面的 case `.lock`
 - 删除 `.batch_summary.lock`
 - 删除 `.comsol_server_start.lock`
+- 删除 `.task_cursor.lock`
+- 删除 `.task_cursor.txt`
+- 删除 batch summary 事件/快照计数文件
 - 杀掉当前用户名下的 `comsolmphserver` 进程
 
 用法：
@@ -405,7 +408,7 @@ cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
 ```
 
 它会读取该输出目录下已有的 `batch_config.mat`，并额外启动若干个新的 MATLAB worker。  
-这些新增 worker 会继续使用同一套 `.lock` 机制抢任务，所以可以安全地并到当前批次里。
+这些新增 worker 会继续使用同一个 `output_dir` 下的共享任务 cursor 和 case `.lock` 机制抢任务，所以可以安全地并到当前批次里。
 
 如果想查看、暂停、恢复或停止当前批次的 worker：
 
@@ -425,7 +428,7 @@ cd /public/home/sa23001064/xqy/acoustic-band-comsol/comsol-band-temp/
 - `pause` / `resume` 是向匹配到的 MATLAB worker 和 `comsolmphserver` 发送 `SIGSTOP` / `SIGCONT`
 - `stop` 是发送 `SIGTERM`
 - `stop` 之后如果某些 case 留下 `.lock`，再执行 `cleanup_portable_batch_linux.sh`
-- 每个进程自动抢占不同样本
+- 每个进程会先通过共享 cursor 领取下一个候选任务，再用 case `.lock` 防止重复计算
 
 建议：
 
@@ -514,7 +517,8 @@ portable_run_batch
 - 读取 `portable_batch_config_template.m`
 - 生成 `output/batch_config.mat`
 - 生成 `output/task_manifest.csv`
-- 在 worker claim/完成 case 时增量更新 `output/batch_summary.csv`
+- 在 worker claim/完成 case 时追加写入 `output/batch_summary_events.csv`
+- 定期从事件日志刷新 `output/batch_summary.csv` 快照
 - 生成 `output/launch_worker_*.bat`
 - 自动启动多个 worker
 
@@ -536,6 +540,7 @@ portable_run_batch
 常见文件：
 
 - `task_manifest.csv`
+- `batch_summary_events.csv`
 - `batch_summary.csv`
 - `*_band.mat`
 - `*_bands_hz.csv`
@@ -547,12 +552,21 @@ portable_run_batch
 其中：
 
 - `task_manifest.csv` 记录这次运行真正使用的任务顺序、索引和源文件路径
-- `batch_summary.csv` 会在 worker claim 或完成 case 时增量更新
-- 它最适合查看已经被 worker 触达的 case 的 `running/ok/error`
-- 它还会记录 `failure_kind`、`infra_recovery_attempts`、`worker_exit_reason`
+- `batch_summary_events.csv` 是追加式事件日志；worker 在 claim 或完成 case 时都会往里追加一行
+- `batch_summary.csv` 是从事件日志定期刷新的最新状态快照
+- `batch_summary.csv` 最适合查看已经被 worker 触达的 case 的 `running/ok/error`
+- 两个文件都会记录 `failure_kind`、`infra_recovery_attempts`、`worker_exit_reason`
 - `*_band.mat` 适合后续数据集训练直接读取
 - `*_bands_hz.csv` 适合快速检查 band 数值
 - `*_acoustic_band.mph` 适合人工打开检查
+
+当前任务分发策略：
+
+- 同一个 `output_dir` 下的所有 worker 共享一个 `.task_cursor.txt`
+- worker 领取任务时先锁住 `.task_cursor.lock`，读取当前索引，再把 cursor 写到下一个索引
+- cursor 负责避免所有 worker 反复从头扫描全任务列表
+- case 目录下的 `.lock` 仍然保留，用来保证同一个 case 不会被两个 worker 同时真正执行
+- 当 cursor 到达末尾后，worker 会再做一次全表重扫，用来捞起中途异常退出后可能遗留的未完成 case
 
 ## 7. 已支持的文件名风格
 
@@ -585,6 +599,12 @@ cfg.skip_completed = true;
 - 已经生成 `*_band.mat` 且存在 `.done` 的 case 会自动跳过
 - 如果只有旧 `.done` 而没有 `*_band.mat`，不会被跳过
 - 可以中断后重启继续跑
+
+续跑兼容性：
+
+- 如果旧批次已经停掉，可以在同一个 `output_dir` 上直接继续跑新版本
+- 新版本第一次写状态时，如果只看到旧的 `batch_summary.csv`，会自动引导生成新的 `batch_summary_events.csv`
+- 不建议让“旧版本 worker”和“新版本 worker”同时对同一个 `output_dir` 混跑；计算结果通常不会重复，但汇总文件机制不同，状态记录会变得不干净
 
 ## 8.1 Worker 自动恢复与熔断
 
