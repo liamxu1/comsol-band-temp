@@ -10,6 +10,7 @@ end
 
 task_files = listTensorFiles(cfg);
 worker_id = resolveWorkerId(cfg);
+pid_cleanup = registerWorkerPid(cfg, resolveCurrentProcessId());
 state = initializeWorkerState(worker_id);
 state = initializeWorkerComsol(cfg, state);
 
@@ -100,6 +101,43 @@ elseif ischar(config_or_file) || isstring(config_or_file)
 else
     error('run_band_dataset_worker:InvalidConfig', ...
         'Unsupported config input.');
+end
+end
+
+function pid = resolveCurrentProcessId()
+pid = [];
+try
+    pid = feature('getpid');
+catch
+end
+end
+
+function cleanup = registerWorkerPid(cfg, pid)
+cleanup = [];
+if isempty(pid) || ~isfinite(pid) || pid <= 0
+    return;
+end
+
+registry_dir = fullfile(cfg.output_dir, '.worker_pids');
+if exist(registry_dir, 'dir') ~= 7
+    mkdir(registry_dir);
+end
+
+pid_file = fullfile(registry_dir, sprintf('worker_%d.pid', round(pid)));
+fid = fopen(pid_file, 'w');
+if fid >= 0
+    fprintf(fid, 'pid=%d\n', round(pid));
+    fprintf(fid, 'created_at=%s\n', char(datetime('now', 'TimeZone', 'local', ...
+        'Format', 'yyyy-MM-dd''T''HH:mm:ssXXX')));
+    fclose(fid);
+end
+
+cleanup = onCleanup(@() deleteWorkerPidFile(pid_file));
+end
+
+function deleteWorkerPidFile(pid_file)
+if exist(pid_file, 'file') == 2
+    delete(pid_file);
 end
 end
 
