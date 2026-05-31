@@ -10,7 +10,12 @@ if ([System.IO.Path]::IsPathRooted($OutputDir)) {
 }
 
 $configFile = Join-Path $resolvedOutputDir "batch_config.mat"
-$lockNames = @(".lock", ".batch_summary.lock", ".comsol_server_start.lock")
+$lockNames = @(".lock", ".batch_summary.lock", ".comsol_server_start.lock", ".task_cursor.lock")
+$stateFileNames = @(
+    ".task_cursor.txt",
+    ".batch_summary_event_count.txt",
+    ".batch_summary_snapshot_event_count.txt"
+)
 
 function Get-RegisteredWorkerPids {
     param(
@@ -210,6 +215,14 @@ if (-not (Test-Path -LiteralPath $resolvedOutputDir -PathType Container)) {
             Write-Host $_.FullName
             Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
         }
+
+    foreach ($stateFileName in $stateFileNames) {
+        $stateFile = Join-Path $resolvedOutputDir $stateFileName
+        if (Test-Path -LiteralPath $stateFile -PathType Leaf) {
+            Write-Host $stateFile
+            Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue
+        }
+    }
 
     $registryDir = Join-Path $resolvedOutputDir ".worker_pids"
     if (Test-Path -LiteralPath $registryDir -PathType Container) {
