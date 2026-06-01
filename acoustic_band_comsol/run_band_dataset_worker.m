@@ -963,7 +963,11 @@ clear cleanup;
 end
 
 function maybeUpdateBatchSummaryRecord(cfg, record, worker_id, has_lock, has_done, has_band_mat)
-if ~resolveConfigLogical(cfg, 'enable_batch_summary', false)
+enabled = false;
+if isfield(cfg, 'enable_batch_summary') && ~isempty(cfg.enable_batch_summary)
+    enabled = logical(cfg.enable_batch_summary);
+end
+if ~enabled
     return;
 end
 updateBatchSummaryRecord(cfg, record, worker_id, has_lock, has_done, has_band_mat);
@@ -1055,7 +1059,11 @@ clear cleanup;
 end
 
 function maybeRefreshBatchSummarySnapshotNow(cfg)
-if ~resolveConfigLogical(cfg, 'enable_batch_summary', false)
+enabled = false;
+if isfield(cfg, 'enable_batch_summary') && ~isempty(cfg.enable_batch_summary)
+    enabled = logical(cfg.enable_batch_summary);
+end
+if ~enabled
     return;
 end
 refreshBatchSummarySnapshotNow(cfg);
