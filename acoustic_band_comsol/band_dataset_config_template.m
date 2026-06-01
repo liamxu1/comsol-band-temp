@@ -29,6 +29,7 @@ cfg.worker_infra_failure_limit = 3;
 cfg.worker_recovery_backoff_s = 5;
 cfg.worker_healthcheck_before_claim = true;
 cfg.worker_restart_comsol_every_n_cases = 0;
+cfg.enable_batch_summary = false;
 cfg.batch_summary_snapshot_every_n_events = 40;
 cfg.comsol_server_start_retry_limit = 4;
 cfg.comsol_server_start_retry_backoff_s = 3;

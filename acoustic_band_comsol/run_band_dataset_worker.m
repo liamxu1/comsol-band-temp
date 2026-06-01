@@ -17,7 +17,15 @@ summary = struct();
 summary.worker_id = worker_id;
 summary.output_dir = cfg.output_dir;
 summary.worker_exit_reason = '';
-summary.records = repmat(buildCaseRecord('', ''), 0, 1);
+collect_record_history = nargout > 0;
+if collect_record_history
+    summary.records = repmat(buildCaseRecord('', ''), 0, 1);
+else
+    summary.records = struct([]);
+end
+summary.completed = 0;
+summary.ok_count = 0;
+summary.error_count = 0;
 claim_mode = 'cursor';
 
 while true
@@ -37,17 +45,25 @@ while true
     end
 
     record = buildCaseRecord(case_id, tensor_file);
-    updateBatchSummaryRecord(cfg, record, worker_id, true, false, false);
+    maybeUpdateBatchSummaryRecord(cfg, record, worker_id, true, false, false);
 
     [record, state, stop_worker] = runClaimedCaseWithRecovery( ...
         tensor_file, cfg, state, lock_file, record);
 
-    summary.records(end + 1, 1) = record; %#ok<AGROW>
+    if collect_record_history
+        summary.records(end + 1, 1) = record; %#ok<AGROW>
+    end
+    summary.completed = summary.completed + 1;
+    if strcmp(record.status, 'ok')
+        summary.ok_count = summary.ok_count + 1;
+    elseif strcmp(record.status, 'error')
+        summary.error_count = summary.error_count + 1;
+    end
     if cfg.verbose
         fprintf('[worker %d] %s | %s | %.2f s\n', ...
             worker_id, case_id, record.status, record.elapsed_s);
     end
-    updateBatchSummaryRecord( ...
+    maybeUpdateBatchSummaryRecord( ...
         cfg, ...
         record, ...
         worker_id, ...
@@ -72,11 +88,7 @@ while true
     end
 end
 
-refreshBatchSummarySnapshotNow(cfg);
-
-summary.completed = numel(summary.records);
-summary.ok_count = sum(strcmp({summary.records.status}, 'ok'));
-summary.error_count = sum(strcmp({summary.records.status}, 'error'));
+maybeRefreshBatchSummarySnapshotNow(cfg);
 
 if ~isempty(summary.worker_exit_reason)
     fprintf('[worker %d] WORKER_INFRA_RECOVERY_FAILED %s\n', ...
@@ -950,6 +962,13 @@ end
 clear cleanup;
 end
 
+function maybeUpdateBatchSummaryRecord(cfg, record, worker_id, has_lock, has_done, has_band_mat)
+if ~resolveConfigLogical(cfg, 'enable_batch_summary', false)
+    return;
+end
+updateBatchSummaryRecord(cfg, record, worker_id, has_lock, has_done, has_band_mat);
+end
+
 function bootstrapBatchSummaryEvents( ...
         summary_file, events_file, event_count_file, snapshot_marker_file)
 if exist(events_file, 'file') == 2 || exist(summary_file, 'file') ~= 2
@@ -1033,6 +1052,13 @@ cleanup = acquireLocalLock(lock_file);
 refreshBatchSummarySnapshot(summary_file, events_file);
 writeScalarCounter(snapshot_marker_file, readScalarCounter(event_count_file, 0));
 clear cleanup;
+end
+
+function maybeRefreshBatchSummarySnapshotNow(cfg)
+if ~resolveConfigLogical(cfg, 'enable_batch_summary', false)
+    return;
+end
+refreshBatchSummarySnapshotNow(cfg);
 end
 
 function refreshBatchSummarySnapshot(summary_file, events_file)
