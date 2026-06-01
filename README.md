@@ -161,6 +161,7 @@ cfg.case_infra_retry_limit = 1;
 cfg.worker_infra_failure_limit = 3;
 cfg.worker_recovery_backoff_s = 5;
 cfg.worker_healthcheck_before_claim = true;
+cfg.enable_batch_summary = false;
 ```
 
 含义：
@@ -194,6 +195,10 @@ cfg.worker_healthcheck_before_claim = true;
   - 每次恢复前等待几秒，避免 server 崩溃后高速重试
 - `worker_healthcheck_before_claim = true`
   - 每次 claim 新 case 前先做 LiveLink / COMSOL 健康检查
+- `enable_batch_summary = false`
+  - 默认不写 `batch_summary_events.csv` / `batch_summary.csv`
+  - 可以减少 worker 常驻时的文件锁、CSV 解析和快照刷新开销
+  - 如果你需要运行中状态表，再手动改回 `true`
 
 高级选项：如果你明确要让所有 worker 连接已有共享 server，可以改成：
 
@@ -324,8 +329,9 @@ portable_run_batch
 - 读取 `portable_batch_config_template.m`
 - 生成 `output/batch_config.mat`
 - 生成 `output/task_manifest.csv`
-- 在 worker claim/完成 case 时追加写入 `output/batch_summary_events.csv`
-- 定期从事件日志刷新 `output/batch_summary.csv` 快照
+- 如果 `enable_batch_summary = true`
+  - 在 worker claim/完成 case 时追加写入 `output/batch_summary_events.csv`
+  - 定期从事件日志刷新 `output/batch_summary.csv` 快照
 - 生成 `output/launch_worker_*.bat`
 - 自动启动多个 worker
 
@@ -376,8 +382,8 @@ control_workers_windows.bat output stop
 常见文件：
 
 - `task_manifest.csv`
-- `batch_summary_events.csv`
-- `batch_summary.csv`
+- `batch_summary_events.csv`（仅 `enable_batch_summary = true` 时）
+- `batch_summary.csv`（仅 `enable_batch_summary = true` 时）
 - `*_band.mat`
 - `*_bands_hz.csv`
 - `*_band_diagram.png`
@@ -388,8 +394,8 @@ control_workers_windows.bat output stop
 其中：
 
 - `task_manifest.csv` 记录这次运行真正使用的任务顺序、索引和源文件路径
-- `batch_summary_events.csv` 是追加式事件日志；worker 在 claim 或完成 case 时都会往里追加一行
-- `batch_summary.csv` 是从事件日志定期刷新的最新状态快照
+- `batch_summary_events.csv` 是追加式事件日志；仅在 `enable_batch_summary = true` 时写入
+- `batch_summary.csv` 是从事件日志定期刷新的最新状态快照；仅在 `enable_batch_summary = true` 时写入
 - `batch_summary.csv` 最适合查看已经被 worker 触达的 case 的 `running/ok/error`
 - 两个文件都会记录 `failure_kind`、`infra_recovery_attempts`、`worker_exit_reason`
 - `*_band.mat` 适合后续数据集训练直接读取
