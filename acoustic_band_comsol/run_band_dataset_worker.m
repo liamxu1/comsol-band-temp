@@ -26,7 +26,10 @@ end
 summary.completed = 0;
 summary.ok_count = 0;
 summary.error_count = 0;
-claim_mode = 'cursor';
+claim_state = struct( ...
+    'mode', 'cursor', ...
+    'rescan_next_index', 1, ...
+    'rescan_passes_started', 0);
 
 while true
 
@@ -38,13 +41,14 @@ while true
         end
     end
 
-    [claimed, lock_file, case_id, tensor_file, claim_mode] = claimNextCase( ...
-        task_files, cfg, worker_id, claim_mode);
+    [claimed, lock_file, case_id, tensor_file, attempt_count, claim_state] = claimNextCase( ...
+        task_files, cfg, worker_id, claim_state);
     if ~claimed
         break;
     end
 
     record = buildCaseRecord(case_id, tensor_file);
+    record.attempt_count = attempt_count;
     maybeUpdateBatchSummaryRecord(cfg, record, worker_id, true, false, false);
 
     [record, state, stop_worker] = runClaimedCaseWithRecovery( ...
@@ -141,7 +145,8 @@ record = struct( ...
     'message', '', ...
     'failure_kind', '', ...
     'infra_recovery_attempts', 0, ...
-    'worker_exit_reason', '');
+    'worker_exit_reason', '', ...
+    'attempt_count', 0);
 end
 
 function [record, state, stop_worker] = runClaimedCaseWithRecovery( ...
@@ -235,36 +240,60 @@ while true
 end
 end
 
-function [claimed, lock_file, case_id, tensor_file, claim_mode] = claimNextCase( ...
-        task_files, cfg, worker_id, claim_mode)
+function [claimed, lock_file, case_id, tensor_file, attempt_count, claim_state] = claimNextCase( ...
+        task_files, cfg, worker_id, claim_state)
 claimed = false;
 lock_file = '';
 case_id = '';
 tensor_file = '';
+attempt_count = 0;
 
-if strcmpi(claim_mode, 'cursor')
-    [claimed, lock_file, case_id, tensor_file, exhausted] = ...
+if strcmpi(claim_state.mode, 'cursor')
+    [claimed, lock_file, case_id, tensor_file, attempt_count, exhausted] = ...
         claimNextCaseFromCursor(task_files, cfg, worker_id);
     if claimed
         return;
     end
     if exhausted
-        claim_mode = 'rescan';
+        max_rescan_passes = max(0, floor(resolveConfigNumeric(cfg, ...
+            'tail_rescan_max_passes', 1)));
+        if max_rescan_passes <= 0
+            return;
+        end
+        claim_state.mode = 'rescan';
+        claim_state.rescan_next_index = 1;
+        claim_state.rescan_passes_started = 1;
     end
 end
 
-if strcmpi(claim_mode, 'rescan')
-    [claimed, lock_file, case_id, tensor_file] = ...
-        tryClaimAnyCaseByScan(task_files, cfg, worker_id);
+if strcmpi(claim_state.mode, 'rescan')
+    max_rescan_passes = max(0, floor(resolveConfigNumeric(cfg, ...
+        'tail_rescan_max_passes', 1)));
+    while claim_state.rescan_passes_started > 0 && ...
+            claim_state.rescan_passes_started <= max_rescan_passes
+        [claimed, lock_file, case_id, tensor_file, attempt_count, exhausted, next_index] = ...
+            tryClaimAnyCaseByScan(task_files, cfg, worker_id, ...
+            claim_state.rescan_next_index);
+        claim_state.rescan_next_index = next_index;
+        if claimed
+            return;
+        end
+        if ~exhausted
+            return;
+        end
+        claim_state.rescan_passes_started = claim_state.rescan_passes_started + 1;
+        claim_state.rescan_next_index = 1;
+    end
 end
 end
 
-function [claimed, lock_file, case_id, tensor_file, exhausted] = ...
+function [claimed, lock_file, case_id, tensor_file, attempt_count, exhausted] = ...
         claimNextCaseFromCursor(task_files, cfg, worker_id)
 claimed = false;
 lock_file = '';
 case_id = '';
 tensor_file = '';
+attempt_count = 0;
 exhausted = false;
 task_count = numel(task_files);
 
@@ -275,28 +304,39 @@ while true
     end
 
     tensor_file = task_files{task_index};
-    [claimed, lock_file, case_id] = tryClaimCase(tensor_file, cfg, worker_id);
+    [claimed, lock_file, case_id, attempt_count] = tryClaimCase( ...
+        tensor_file, cfg, worker_id);
     if claimed
         return;
     end
 end
 end
 
-function [claimed, lock_file, case_id, tensor_file] = tryClaimAnyCaseByScan( ...
-        task_files, cfg, worker_id)
+function [claimed, lock_file, case_id, tensor_file, attempt_count, exhausted, next_index] = ...
+        tryClaimAnyCaseByScan(task_files, cfg, worker_id, start_index)
 claimed = false;
 lock_file = '';
 case_id = '';
 tensor_file = '';
+attempt_count = 0;
+exhausted = false;
 
-for i = 1:numel(task_files)
+if nargin < 4 || isempty(start_index)
+    start_index = 1;
+end
+next_index = start_index;
+
+for i = start_index:numel(task_files)
     candidate_file = task_files{i};
-    [claimed, lock_file, case_id] = tryClaimCase(candidate_file, cfg, worker_id);
+    [claimed, lock_file, case_id, attempt_count] = tryClaimCase( ...
+        candidate_file, cfg, worker_id);
+    next_index = i + 1;
     if claimed
         tensor_file = candidate_file;
         return;
     end
 end
+exhausted = true;
 end
 
 function [task_index, exhausted] = reserveNextTaskIndex(cfg, task_count)
@@ -862,47 +902,58 @@ else
 end
 end
 
-function [claimed, lock_file, case_id] = tryClaimCase(tensor_file, cfg, worker_id)
+function [claimed, lock_file, case_id, attempt_count] = tryClaimCase(tensor_file, cfg, worker_id)
 [~, base] = fileparts(tensor_file);
 case_id = regexprep(base, '_tensor$', '');
 if ~isempty(cfg.case_name_suffix)
     case_id = [case_id, cfg.case_name_suffix];
 end
 
-case_output_dir = fullfile(cfg.output_dir, case_id);
-if ~exist(case_output_dir, 'dir')
-    mkdir(case_output_dir);
-end
+claimed = false;
+lock_file = '';
+attempt_count = 0;
 
+case_output_dir = fullfile(cfg.output_dir, case_id);
 dataset_file = fullfile(case_output_dir, [case_id, '_band.mat']);
 done_file = fullfile(case_output_dir, '.done');
+done_info = readDoneMetadata(done_file);
 lock_file = fullfile(case_output_dir, '.lock');
 
 if cfg.skip_completed && exist(dataset_file, 'file') && exist(done_file, 'file')
-    claimed = false;
     return;
+end
+
+max_case_attempts = max(1, floor(resolveConfigNumeric(cfg, 'max_case_attempts', 3)));
+if done_info.attempt_count >= max_case_attempts
+    return;
+end
+
+if ~exist(case_output_dir, 'dir')
+    mkdir(case_output_dir);
 end
 
 ok = createLockDirectory(lock_file);
 if ~ok
     if exist(lock_file, 'dir')
-        claimed = false;
         return;
     end
     error('run_band_dataset_worker:LockOpenFailed', ...
         'Cannot create lock directory %s.', lock_file);
 end
 claimed = true;
+attempt_count = done_info.attempt_count + 1;
 
 claim_info = fullfile(lock_file, 'claim.txt');
 fid = fopen(claim_info, 'w');
 if fid >= 0
-    fprintf(fid, 'worker=%d\nsource=%s\n', worker_id, tensor_file);
+    fprintf(fid, 'worker=%d\nsource=%s\nattempt_count=%d\n', ...
+        worker_id, tensor_file, attempt_count);
     fclose(fid);
 end
 
 if cfg.verbose
-    fprintf('[worker %d] claimed %s\n', worker_id, case_id);
+    fprintf('[worker %d] claimed %s (attempt %d)\n', ...
+        worker_id, case_id, attempt_count);
 end
 end
 
@@ -916,6 +967,7 @@ if fid >= 0
     fprintf(fid, 'dataset_file=%s\n', record.dataset_file);
     fprintf(fid, 'failure_kind=%s\n', record.failure_kind);
     fprintf(fid, 'infra_recovery_attempts=%d\n', record.infra_recovery_attempts);
+    fprintf(fid, 'attempt_count=%d\n', record.attempt_count);
     fprintf(fid, 'worker_exit_reason=%s\n', sanitizeDoneValue(record.worker_exit_reason));
     fprintf(fid, 'message=%s\n', sanitizeDoneValue(record.message));
     fclose(fid);
@@ -937,6 +989,45 @@ end
 [status, msg] = mkdir(lock_file);
 if status && ~contains(msg, 'already exists', 'IgnoreCase', true)
     ok = true;
+end
+end
+
+function info = readDoneMetadata(done_file)
+info = struct('status', '', 'attempt_count', 0);
+if exist(done_file, 'file') ~= 2
+    return;
+end
+
+fid = fopen(done_file, 'r');
+if fid < 0
+    return;
+end
+cleanup = onCleanup(@() fclose(fid));
+while true
+    line = fgetl(fid);
+    if ~ischar(line)
+        break;
+    end
+    tokens = regexp(strtrim(line), '^([A-Za-z0-9_]+)=(.*)$', 'tokens', 'once');
+    if isempty(tokens)
+        continue;
+    end
+    key = char(tokens{1});
+    value = char(tokens{2});
+    switch key
+        case 'status'
+            info.status = value;
+        case 'attempt_count'
+            parsed = str2double(value);
+            if isfinite(parsed) && parsed > 0
+                info.attempt_count = floor(parsed);
+            end
+    end
+end
+clear cleanup;
+
+if info.attempt_count <= 0 && ~isempty(info.status)
+    info.attempt_count = 1;
 end
 end
 

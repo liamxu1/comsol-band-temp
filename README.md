@@ -572,7 +572,8 @@ portable_run_batch
 - worker 领取任务时先锁住 `.task_cursor.lock`，读取当前索引，再把 cursor 写到下一个索引
 - cursor 负责避免所有 worker 反复从头扫描全任务列表
 - case 目录下的 `.lock` 仍然保留，用来保证同一个 case 不会被两个 worker 同时真正执行
-- 当 cursor 到达末尾后，worker 会再做一次全表重扫，用来捞起中途异常退出后可能遗留的未完成 case
+- 当 cursor 到达末尾后，worker 最多只做 `tail_rescan_max_passes` 轮尾部重扫；默认只扫 1 轮
+- 普通 case 默认总尝试次数上限为 `max_case_attempts = 3`；失败 3 次后会保留 `.done(status=error)` 并跳过，不再被后续重扫反复捞起
 
 ## 7. 已支持的文件名风格
 
@@ -598,12 +599,15 @@ p4_Vol0.53_K0.0000_Sample_103461_tensor.mat
 
 ```matlab
 cfg.skip_completed = true;
+cfg.max_case_attempts = 3;
+cfg.tail_rescan_max_passes = 1;
 ```
 
 含义：
 
 - 已经生成 `*_band.mat` 且存在 `.done` 的 case 会自动跳过
 - 如果只有旧 `.done` 而没有 `*_band.mat`，不会被跳过
+- 如果 case 已经达到 `max_case_attempts`，即使没有 `*_band.mat`，后续也会跳过
 - 可以中断后重启继续跑
 
 续跑兼容性：
