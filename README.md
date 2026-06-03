@@ -35,6 +35,8 @@
 portable_batch_package/
   README.md
   start_portable_batch_windows.bat
+  list_failed_cases_windows.bat
+  list_failed_cases_windows.ps1
   portable_runner/
     portable_add_paths.m
     portable_batch_config_template.m
@@ -542,6 +544,18 @@ build_portable_batch_package
 
 ```text
 bspline/acoustic_band_comsol/portable_batch_package/dist
+```
+
+失败 case 导出：
+
+```bat
+list_failed_cases_windows.bat output > failed_cases.csv
+```
+
+会输出标准 CSV，列为：
+
+```text
+case_id,attempt_count,failure_kind,worker_exit_reason,message
 ```
 
 如果你愿意，我下一步可以继续帮你做两件事之一：
