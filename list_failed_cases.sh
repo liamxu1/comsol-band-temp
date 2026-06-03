@@ -28,15 +28,21 @@ print_row() {
     local worker_exit_reason="$4"
     local message="$5"
 
-    printf '%s\t%s\t%s\t%s\t%s\n' \
-        "${case_id}" \
-        "${attempt_count}" \
-        "${failure_kind}" \
-        "${worker_exit_reason}" \
-        "${message}"
+    printf '%s,%s,%s,%s,%s\n' \
+        "$(csv_escape "${case_id}")" \
+        "$(csv_escape "${attempt_count}")" \
+        "$(csv_escape "${failure_kind}")" \
+        "$(csv_escape "${worker_exit_reason}")" \
+        "$(csv_escape "${message}")"
 }
 
-echo -e "case_id\tattempt_count\tfailure_kind\tworker_exit_reason\tmessage"
+csv_escape() {
+    local value="$1"
+    value="${value//\"/\"\"}"
+    printf '"%s"' "${value}"
+}
+
+printf '%s\n' '"case_id","attempt_count","failure_kind","worker_exit_reason","message"'
 
 found_any="false"
 while IFS= read -r done_file; do
